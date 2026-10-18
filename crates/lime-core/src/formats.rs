@@ -38,7 +38,7 @@ pub fn kind(path: &Path) -> Kind {
         "mp3" | "m4a" | "wav" | "flac" | "ogg" | "opus" | "aiff" | "wma" | "aac" | "caf" => Kind::Audio,
         "mp4" | "mov" | "mkv" | "webm" | "avi" | "wmv" | "m4v" => Kind::Video,
         "pdf" => Kind::Pdf,
-        "docx" | "doc" | "rtf" | "rtfd" | "txt" | "md" | "markdown" | "html" | "odt" | "epub" | "webarchive" => Kind::Document,
+        "docx" | "doc" | "rtf" | "rtfd" | "txt" | "md" | "markdown" | "html" | "odt" | "epub" | "webarchive" | "textclipping" => Kind::Document,
         "xlsx" | "xls" | "ods" | "csv" | "tsv" => Kind::Spreadsheet,
         "srt" | "vtt" => Kind::Subtitle,
         "zip" | "tar" | "tgz" | "gz" | "rar" | "7z" => Kind::Archive,

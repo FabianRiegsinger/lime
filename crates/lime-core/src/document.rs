@@ -19,6 +19,14 @@ fn sources(input: &Path, tmp: &Path) -> Result<(Vec<PathBuf>, bool)> {
             Ok((vec![p], false))
         }
         "epub" => Ok((epub_chapters(input, tmp)?, true)),
+        // A Finder text clipping is a property list holding the text under its type identifier.
+        // shortcut: plain text only; older clippings that keep their text in a resource fork are rejected.
+        "textclipping" => {
+            let p = tmp.join("doc.txt");
+            run(Command::new("plutil").args(["-extract", r"UTI-Data.public\.utf8-plain-text", "raw", "-o"]).arg(&p).arg(input))
+                .context("text clipping holds no plain text")?;
+            Ok((vec![p], false))
+        }
         _ => Ok((vec![input.to_path_buf()], false)),
     }
 }
@@ -146,6 +154,19 @@ mod tests {
         let back = convert(&epub, "txt").unwrap();
         assert_eq!(back.file_name().unwrap(), "notes 2.txt");
         assert!(std::fs::read_to_string(back).unwrap().contains("Hello world & 1 < 2."));
+    }
+
+    #[test]
+    fn text_clipping_to_txt() {
+        let dir = tempfile::tempdir().unwrap();
+        let plist = dir.path().join("Note.textClipping");
+        std::fs::write(
+            &plist,
+            r#"<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>UTI-Data</key><dict><key>public.utf8-plain-text</key><string>Clip &amp; paste</string></dict></dict></plist>"#,
+        )
+        .unwrap();
+        let txt = convert(&plist, "txt").unwrap();
+        assert!(std::fs::read_to_string(txt).unwrap().contains("Clip & paste"));
     }
 
     #[test]

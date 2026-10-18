@@ -11,6 +11,8 @@ Results are saved as new files next to the original; originals are never changed
 | Control              | Actions | AirDrop, Float, Copy, Move, Copy Path, Terminal |
 
 The wheel stays open after you release the key. Press another wheel key to switch wheels, or drop on the centre to cancel.
+
+**Keyboard:** select files in Finder and press **Option-Return** to open the Convert wheel. Use the arrow keys to choose, Return to apply and Escape to cancel. Hold a wheel key to switch wheels. The first time, macOS asks whether Lime may control Finder; Lime needs this to read the selection. (Plain Return would clash with renaming in Finder.)
 You can change the keys under **Settings…** in the 🍋‍🟩 menu-bar menu. Settings also has:
 
 - **Appearance:** System, Light or Dark.
@@ -22,7 +24,7 @@ You can change the keys under **Settings…** in the 🍋‍🟩 menu-bar menu. 
 - **Audio:** MP3, M4A, WAV, FLAC, OGG, Opus, AIFF, WMA.
 - **Video:** MP4, MOV, MKV, WebM, AVI, WMV, plus GIF and MP3 export.
 - **PDF:** TXT, Markdown, DOCX and EPUB (text only), and JPG/PNG (every page, 300 DPI).
-- **Documents:** DOCX, DOC, ODT, RTF, TXT, Markdown, HTML, EPUB → DOCX, ODT, RTF, TXT, MD, HTML, EPUB, PDF.
+- **Documents:** DOCX, DOC, ODT, RTF, TXT, Markdown, HTML, EPUB, text clippings → DOCX, ODT, RTF, TXT, MD, HTML, EPUB, PDF.
 - **Spreadsheets:** XLSX, XLS, ODS, CSV, TSV → XLSX, ODS, CSV, TSV, PDF.
 - **Subtitles:** SRT ⇄ VTT, plus TXT export.
 - **Archives:** ZIP, TAR, TGZ ⇄ each other. RAR, 7z and GZ are input only. Any file or folder can be archived.
@@ -47,7 +49,7 @@ scripts/bundle.sh          # builds ffmpeg once, then build/Lime.app (~27 MB)
 open build/Lime.app
 ```
 
-The app needs no special permissions. To start it at login, add `Lime.app` under System Settings › General › Login Items.
+Dragging needs no special permissions; the keyboard flow asks once for permission to control Finder. To start it at login, add `Lime.app` under System Settings › General › Login Items.
 
 ## Layout
 
@@ -75,8 +77,8 @@ These Tangerine features are missing:
 - The interactive photo, background, video and audio editors. Lime has parameter-based tools instead.
 - PDF → DOCX layout reconstruction (Lime exports the text only), and PDF → PPTX/XLSX.
 - PowerPoint rendering, and Pages files.
-- The keyboard flow (Enter on a Finder selection, arrow keys and Escape in the wheel) and the touch flow.
-- Text clippings as input.
+- The touch flow.
+- Enter alone on a Finder selection; Lime uses Option-Return so renaming still works.
 
 Markdown export is plain text.
 

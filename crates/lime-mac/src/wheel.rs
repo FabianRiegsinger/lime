@@ -6,8 +6,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBackingStoreType, NSBezierPath, NSColor, NSDragOperation, NSDraggingInfo, NSFont, NSFontAttributeName,
-    NSForegroundColorAttributeName, NSPanel, NSPasteboardTypeFileURL, NSGlassEffectView, NSGlassEffectViewStyle, NSPopUpMenuWindowLevel, NSStringDrawing, NSView,
+    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBackingStoreType, NSBezierPath, NSColor, NSDragOperation, NSDraggingInfo, NSEvent, NSFont, NSFontAttributeName,
+    NSForegroundColorAttributeName, NSPanel, NSPasteboardTypeFileURL, NSWindow, NSGlassEffectView, NSGlassEffectViewStyle, NSPopUpMenuWindowLevel, NSStringDrawing, NSView,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{NSArray, NSDictionary, NSPoint, NSRect, NSSize, NSString};
@@ -149,7 +149,47 @@ pub struct WheelData {
     hovered: Option<usize>,
     /// Glassiness, or `None` when Liquid Glass is unavailable.
     glass: Option<f64>,
+    /// Files chosen in Finder when the wheel was opened from the keyboard; `None` during a drag.
+    files: Option<Vec<PathBuf>>,
 }
+
+/// The choice `delta` steps clockwise from `current`, wrapping around; the first one when nothing is selected.
+fn step(current: Option<usize>, n: usize, delta: isize) -> Option<usize> {
+    if n == 0 {
+        return None;
+    }
+    Some(current.map_or(0, |i| (i as isize + delta).rem_euclid(n as isize) as usize))
+}
+
+const KEY_RETURN: u16 = 36;
+const KEY_ENTER: u16 = 76;
+const KEY_ESCAPE: u16 = 53;
+const KEY_LEFT: u16 = 123;
+const KEY_RIGHT: u16 = 124;
+const KEY_DOWN: u16 = 125;
+const KEY_UP: u16 = 126;
+
+define_class!(
+    /// Borderless panels refuse key status by default; the keyboard flow needs it.
+    #[unsafe(super(NSPanel, NSWindow))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "LimeWheelPanel"]
+    struct WheelPanel;
+
+    impl WheelPanel {
+        #[unsafe(method(canBecomeKeyWindow))]
+        fn can_become_key(&self) -> bool {
+            true
+        }
+
+        /// Clicking elsewhere closes a keyboard-opened wheel.
+        #[unsafe(method(resignKeyWindow))]
+        fn resign_key(&self) {
+            unsafe { msg_send![super(self), resignKeyWindow] }
+            hide();
+        }
+    }
+);
 
 /// Segment under `p` (view coordinates), counted clockwise from 12 o'clock.
 fn segment_at(p: NSPoint, n: usize) -> Option<usize> {
@@ -254,6 +294,48 @@ define_class!(
             crate::queue(choice, crate::files_on(&info.draggingPasteboard()));
             Bool::YES
         }
+
+        #[unsafe(method(acceptsFirstResponder))]
+        fn accepts_first_responder(&self) -> bool {
+            true
+        }
+
+        #[unsafe(method(keyDown:))]
+        fn key_down(&self, event: &NSEvent) {
+            let (hovered, n) = {
+                let data = self.ivars().borrow();
+                (data.hovered, data.choices.len())
+            };
+            match event.keyCode() {
+                KEY_RIGHT | KEY_DOWN => self.set_hovered(step(hovered, n, 1)),
+                KEY_LEFT | KEY_UP => self.set_hovered(step(hovered, n, -1)),
+                KEY_RETURN | KEY_ENTER => {
+                    let picked = {
+                        let data = self.ivars().borrow();
+                        data.hovered.and_then(|i| data.choices.get(i).cloned()).zip(data.files.clone())
+                    };
+                    hide();
+                    if let Some((choice, files)) = picked {
+                        crate::queue(choice, files);
+                    }
+                }
+                KEY_ESCAPE => hide(),
+                _ => {}
+            }
+        }
+
+        /// A wheel key switches wheels, as during a drag.
+        #[unsafe(method(flagsChanged:))]
+        fn flags_changed(&self, event: &NSEvent) {
+            let (kind, files) = {
+                let data = self.ivars().borrow();
+                (data.kind, data.files.clone())
+            };
+            let Some(files) = files else { return };
+            if let Some(next) = crate::settings::wheel_for(event.modifierFlags()).filter(|k| Some(*k) != kind) {
+                show(self.mtm(), next, &files, NSPoint::new(0.0, 0.0), true);
+            }
+        }
     }
 );
 
@@ -312,17 +394,22 @@ pub fn shown() -> Option<WheelKind> {
     })
 }
 
-pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoint) {
+/// Opens the wheel centred on `at`. With `keyboard` it takes key focus and remembers `files`,
+/// since there is no drag pasteboard to read them from.
+pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoint, keyboard: bool) {
     let choices = choices(kind, files);
     WHEEL.with_borrow_mut(|w| {
         let (panel, view, glass) = w.get_or_insert_with(|| {
-            let panel = NSPanel::initWithContentRect_styleMask_backing_defer(
-                NSPanel::alloc(mtm),
-                NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(SIZE, SIZE)),
-                NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
-                NSBackingStoreType::Buffered,
-                false,
-            );
+            let panel: Retained<WheelPanel> = unsafe {
+                msg_send![
+                    WheelPanel::alloc(mtm),
+                    initWithContentRect: NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(SIZE, SIZE)),
+                    styleMask: NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel,
+                    backing: NSBackingStoreType::Buffered,
+                    defer: false
+                ]
+            };
+            let panel = Retained::into_super(panel);
             panel.setOpaque(false);
             panel.setBackgroundColor(Some(&NSColor::clearColor()));
             panel.setHasShadow(!has_glass()); // the glass draws its own
@@ -354,18 +441,28 @@ pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoi
         }
         // The glass stays clear; the view paints a solid disc over it that fades out as glassiness rises.
         let g = glass.as_ref().map(|_| crate::settings::glassiness());
-        *view.ivars().borrow_mut() = WheelData { kind: Some(kind), choices, hovered: None, glass: g };
+        let hovered = if keyboard && !choices.is_empty() { Some(0) } else { None };
+        let files = keyboard.then(|| files.to_vec());
+        *view.ivars().borrow_mut() = WheelData { kind: Some(kind), choices, hovered, glass: g, files };
         view.setNeedsDisplay(true);
         view.displayIfNeeded();
         panel.invalidateShadow(); // the shadow follows the drawn circle, not the square panel
-        panel.orderFrontRegardless();
+        if keyboard {
+            panel.makeKeyAndOrderFront(None);
+            panel.makeFirstResponder(Some(view));
+        } else {
+            panel.orderFrontRegardless();
+        }
     });
 }
 
 pub fn hide() {
-    WHEEL.with_borrow(|w| {
-        if let Some((panel, ..)) = w {
-            panel.orderOut(None);
+    // try_borrow: ordering out resigns key, and resignKeyWindow calls back in here.
+    WHEEL.with(|w| {
+        if let Ok(w) = w.try_borrow() {
+            if let Some((panel, ..)) = &*w {
+                panel.orderOut(None);
+            }
         }
     });
 }
@@ -385,6 +482,14 @@ mod tests {
         assert_eq!(segment_at(NSPoint::new(c, c), 4), None); // centre cancels
         assert_eq!(segment_at(NSPoint::new(c + r, c), 0), None);
         assert_eq!(segment_at(NSPoint::new(c + DISC + 1.0, c), 4), None); // just outside the disc
+    }
+
+    #[test]
+    fn arrow_keys_wrap_around() {
+        assert_eq!(step(None, 4, 1), Some(0));
+        assert_eq!(step(Some(3), 4, 1), Some(0));
+        assert_eq!(step(Some(0), 4, -1), Some(3));
+        assert_eq!(step(Some(1), 0, 1), None);
     }
 
     #[test]

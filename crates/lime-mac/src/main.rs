@@ -3,6 +3,7 @@
 
 mod actions;
 mod jobs;
+mod keyboard;
 mod settings;
 mod wheel;
 
@@ -79,6 +80,7 @@ fn tick(mtm: MainThreadMarker) {
         }
     }
     jobs::refresh(mtm);
+    keyboard::tick(mtm);
 
     let mouse_down = NSEvent::pressedMouseButtons() & 1 != 0;
     let count = NSPasteboard::pasteboardWithName(unsafe { NSPasteboardNameDrag }).changeCount();
@@ -111,7 +113,7 @@ fn tick(mtm: MainThreadMarker) {
     // The wheel stays open after the key is released; another key switches it.
     if let Some(kind) = settings::wheel_for(NSEvent::modifierFlags_class()) {
         if wheel::shown() != Some(kind) {
-            wheel::show(mtm, kind, &files, NSEvent::mouseLocation());
+            wheel::show(mtm, kind, &files, NSEvent::mouseLocation(), false);
         }
     }
 }
@@ -129,6 +131,7 @@ define_class!(
         fn did_finish_launching(&self, _n: &NSNotification) {
             let mtm = self.mtm();
             settings::apply_appearance(mtm);
+            keyboard::install();
             STATE.with_borrow_mut(|s| {
                 s.drag_count = NSPasteboard::pasteboardWithName(unsafe { NSPasteboardNameDrag }).changeCount();
                 s.status_item = Some(status_item(mtm, self));
@@ -185,6 +188,7 @@ fn status_item(mtm: MainThreadMarker, delegate: &Delegate) -> Retained<NSStatusI
         mi
     };
     add(ns_string!("Drag a file, then hold a wheel key"), None, ns_string!(""));
+    add(ns_string!("Or select files in Finder and press ⌥↩"), None, ns_string!(""));
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let settings_item = add(ns_string!("Settings…"), Some(sel!(openSettings:)), ns_string!(","));
     unsafe { settings_item.setTarget(Some(delegate)) };

@@ -36,6 +36,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>Lime reads the files selected in Finder when you press Option-Return.</string>
   <key>NSHighResolutionCapable</key><true/>
 </dict>
 </plist>
