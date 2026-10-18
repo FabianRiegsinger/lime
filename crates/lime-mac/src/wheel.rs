@@ -564,7 +564,8 @@ pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoi
                     NSRect::new(NSPoint::new(inset, inset), NSSize::new(DISC * 2.0, DISC * 2.0)),
                 );
                 glass.setCornerRadius(DISC);
-                glass.setStyle(NSGlassEffectViewStyle::Clear);
+                // Regular, not Clear: Clear adapts to what is behind it and fades to almost nothing over light windows.
+                glass.setStyle(NSGlassEffectViewStyle::Regular);
                 root.addSubview(&glass);
                 glass
             });
@@ -579,7 +580,7 @@ pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoi
             panel.setFrameOrigin(NSPoint::new(at.x - SIZE / 2.0, at.y - SIZE / 2.0));
         }
         let (opened, scale) = if fresh { (Some(Instant::now()), 0.0) } else { (view.ivars().borrow().opened, view.ivars().borrow().scale) };
-        // The glass stays clear; the view paints a solid disc over it that fades out as glassiness rises.
+        // The view paints a solid disc over the glass that fades out as glassiness rises.
         let g = glass.as_ref().map(|_| crate::settings::glassiness());
         let hovered = if keyboard && !choices.is_empty() { Some(0) } else { None };
         let files = keyboard.then(|| files.to_vec());
