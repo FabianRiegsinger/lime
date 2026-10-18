@@ -1,7 +1,7 @@
 //! PDF via PDFKit, and document → PDF via AppKit printing (macOS only).
 //! Must run on the main thread; the Lime app runs every job through the `lime` CLI for that reason.
 
-use crate::util::{out_path, produce, stem};
+use crate::util::{out_path, produce, run, stem};
 use anyhow::{bail, Context, Result};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
@@ -67,6 +67,19 @@ pub fn convert(input: &Path, target: &str) -> Result<PathBuf> {
         "txt" | "md" => {
             let text = unsafe { doc.string() }.map(|s| s.to_string()).unwrap_or_default();
             produce(out_path(input, "", target), |out| Ok(std::fs::write(out, text)?))
+        }
+        // shortcut: text only, one paragraph per line; no layout, images or tables.
+        "docx" | "epub" => {
+            let text = unsafe { doc.string() }.map(|s| s.to_string()).unwrap_or_default();
+            produce(out_path(input, "", target), |out| {
+                if target == "epub" {
+                    return crate::document::write_epub(&stem(input), &text, out);
+                }
+                let tmp = tempfile::tempdir()?;
+                let txt = tmp.path().join("doc.txt");
+                std::fs::write(&txt, text)?;
+                run(std::process::Command::new("textutil").args(["-convert", "docx", "-output"]).arg(out).arg(&txt)).map(drop)
+            })
         }
         "jpg" | "png" => {
             let ty = if target == "png" { NSBitmapImageFileType::PNG } else { NSBitmapImageFileType::JPEG };

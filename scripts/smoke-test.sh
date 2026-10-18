@@ -44,9 +44,12 @@ check "md->docx" -- run to:docx doc.md
 check "docx->epub" -- run to:epub doc.docx
 check "csv->xlsx" -- run to:xlsx t.csv
 check "csv->pdf" -- run to:pdf t.csv
+check "csv->ods" -- run to:ods t.csv
 check "srt->vtt" -- run to:vtt s.srt
 check "pdf->txt" -- run to:txt doc.pdf
 check "pdf->png" -- run to:png doc.pdf
+check "pdf->docx" -- run to:docx doc.pdf
+check "pdf->epub" -- run to:epub doc.pdf
 check "pdf rotate" -- run rotate doc.pdf
 check "pdf merge" -- run merge doc.pdf pic.pdf
 check "pdf compress" -- run compress pic.pdf

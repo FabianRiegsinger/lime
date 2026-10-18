@@ -11,16 +11,19 @@ Results are saved as new files next to the original; originals are never changed
 | Control              | Actions | AirDrop, Float, Copy, Move, Copy Path, Terminal |
 
 The wheel stays open after you release the key. Press another wheel key to switch wheels, or drop on the centre to cancel.
-You can change the keys under **Settings…** in the 🍋‍🟩 menu-bar menu.
+You can change the keys under **Settings…** in the 🍋‍🟩 menu-bar menu. Settings also has:
+
+- **Appearance:** System, Light or Dark.
+- **Glassiness:** how see-through the wheel's background is, from solid to clear glass. It needs macOS 26 or later; older systems show a plain grey wheel and the slider is disabled.
 
 ## Formats
 
 - **Images:** JPG, PNG, WebP, HEIC, TIFF, AVIF, BMP, GIF ⇄ each other, plus PDF export. SVG, JPEG 2000 and JPEG XL are input only.
 - **Audio:** MP3, M4A, WAV, FLAC, OGG, Opus, AIFF, WMA.
 - **Video:** MP4, MOV, MKV, WebM, AVI, WMV, plus GIF and MP3 export.
-- **PDF:** TXT, Markdown, and JPG/PNG (every page, 300 DPI).
+- **PDF:** TXT, Markdown, DOCX and EPUB (text only), and JPG/PNG (every page, 300 DPI).
 - **Documents:** DOCX, DOC, ODT, RTF, TXT, Markdown, HTML, EPUB → DOCX, ODT, RTF, TXT, MD, HTML, EPUB, PDF.
-- **Spreadsheets:** XLSX, XLS, ODS, CSV, TSV → XLSX, CSV, TSV, PDF.
+- **Spreadsheets:** XLSX, XLS, ODS, CSV, TSV → XLSX, ODS, CSV, TSV, PDF.
 - **Subtitles:** SRT ⇄ VTT, plus TXT export.
 - **Archives:** ZIP, TAR, TGZ ⇄ each other. RAR, 7z and GZ are input only. Any file or folder can be archived.
 
@@ -70,10 +73,10 @@ scripts/smoke-test.sh build/Lime.app/Contents/MacOS/lime  # same, against the bu
 These Tangerine features are missing:
 
 - The interactive photo, background, video and audio editors. Lime has parameter-based tools instead.
-- PDF → DOCX/PPTX/XLSX layout reconstruction.
+- PDF → DOCX layout reconstruction (Lime exports the text only), and PDF → PPTX/XLSX.
 - PowerPoint rendering, and Pages files.
-- ODS export.
-- The keyboard-only flow (Enter on a Finder selection) and the touch flow.
+- The keyboard flow (Enter on a Finder selection, arrow keys and Escape in the wheel) and the touch flow.
+- Text clippings as input.
 
 Markdown export is plain text.
 

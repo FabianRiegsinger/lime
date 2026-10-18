@@ -52,10 +52,10 @@ pub fn targets(path: &Path, k: Kind) -> Vec<&'static str> {
         Kind::Image => &["jpg", "png", "webp", "heic", "tiff", "avif", "bmp", "gif", "pdf"],
         Kind::Audio => &["mp3", "m4a", "wav", "flac", "ogg", "opus", "aiff", "wma"],
         Kind::Video => &["mp4", "mov", "mkv", "webm", "avi", "wmv", "gif", "mp3"],
-        Kind::Pdf if cfg!(target_os = "macos") => &["txt", "md", "jpg", "png"],
+        Kind::Pdf if cfg!(target_os = "macos") => &["txt", "md", "docx", "epub", "jpg", "png"],
         Kind::Pdf => &[],
         Kind::Document => &["docx", "odt", "rtf", "txt", "md", "html", "epub", "pdf"],
-        Kind::Spreadsheet => &["xlsx", "csv", "tsv", "pdf"],
+        Kind::Spreadsheet => &["xlsx", "ods", "csv", "tsv", "pdf"],
         Kind::Subtitle => &["srt", "vtt", "txt"],
         Kind::Archive | Kind::Other => &["zip", "tar", "tgz"],
     };

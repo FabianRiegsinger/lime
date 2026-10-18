@@ -1,10 +1,11 @@
-//! Spreadsheets: read XLSX/XLS/ODS (calamine) and CSV/TSV, write XLSX, CSV, TSV and PDF.
+//! Spreadsheets: read XLSX/XLS/ODS (calamine) and CSV/TSV, write XLSX, ODS, CSV, TSV and PDF.
 
 use crate::formats::ext;
-use crate::util::{out_path, produce, stem};
+use crate::util::{out_path, produce, run, stem};
 use anyhow::{bail, Result};
 use calamine::Reader;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 type Table = Vec<Vec<String>>;
 
@@ -60,6 +61,45 @@ fn write_xlsx(sheets: &[(String, Table)], out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Minimal OpenDocument spreadsheet: numbers as floats, everything else as strings.
+fn write_ods(sheets: &[(String, Table)], out: &Path) -> Result<()> {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+    let mut body = String::new();
+    for (name, rows) in sheets {
+        body += &format!("<table:table table:name=\"{}\">", esc(name));
+        for row in rows {
+            body += "<table:table-row>";
+            for cell in row {
+                body += &match cell.parse::<f64>() {
+                    Ok(n) if n.is_finite() => format!("<table:table-cell office:value-type=\"float\" office:value=\"{n}\"><text:p>{}</text:p></table:table-cell>", esc(cell)),
+                    _ => format!("<table:table-cell office:value-type=\"string\"><text:p>{}</text:p></table:table-cell>", esc(cell)),
+                };
+            }
+            body += "</table:table-row>";
+        }
+        body += "</table:table>";
+    }
+    let tmp = tempfile::tempdir()?;
+    let d = tmp.path();
+    std::fs::create_dir(d.join("META-INF"))?;
+    std::fs::write(d.join("mimetype"), "application/vnd.oasis.opendocument.spreadsheet")?;
+    std::fs::write(
+        d.join("META-INF/manifest.xml"),
+        r#"<?xml version="1.0" encoding="UTF-8"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" manifest:version="1.2"><manifest:file-entry manifest:full-path="/" manifest:media-type="application/vnd.oasis.opendocument.spreadsheet"/><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/></manifest:manifest>"#,
+    )?;
+    std::fs::write(
+        d.join("content.xml"),
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2"><office:body><office:spreadsheet>{body}</office:spreadsheet></office:body></office:document-content>"#
+        ),
+    )?;
+    let out = std::path::absolute(out)?;
+    // mimetype must be the first entry, stored uncompressed.
+    run(Command::new("zip").current_dir(d).args(["-X0q"]).arg(&out).arg("mimetype"))?;
+    run(Command::new("zip").current_dir(d).args(["-Xr9q"]).arg(&out).args(["META-INF", "content.xml"]))?;
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn write_pdf(sheets: &[(String, Table)], out: &Path) -> Result<()> {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
@@ -92,6 +132,7 @@ pub fn convert(input: &Path, target: &str) -> Result<PathBuf> {
         "csv" => write_delimited(&sheets[0].1, b',', out),
         "tsv" => write_delimited(&sheets[0].1, b'\t', out),
         "xlsx" => write_xlsx(&sheets, out),
+        "ods" => write_ods(&sheets, out),
         #[cfg(target_os = "macos")]
         "pdf" => write_pdf(&sheets, out),
         _ => bail!("cannot convert spreadsheet to {target}"),
@@ -110,5 +151,15 @@ mod tests {
         let xlsx = convert(&csv, "xlsx").unwrap();
         let tsv = convert(&xlsx, "tsv").unwrap();
         assert_eq!(std::fs::read_to_string(tsv).unwrap(), "name\tqty\na, b\t3\nc\t4.5\n");
+    }
+
+    #[test]
+    fn ods_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let csv = dir.path().join("data.csv");
+        std::fs::write(&csv, "name,qty\n<a & b>,3\n").unwrap();
+        let ods = convert(&csv, "ods").unwrap();
+        let back = convert(&ods, "csv").unwrap();
+        assert_eq!(std::fs::read_to_string(back).unwrap(), "name,qty\n<a & b>,3\n");
     }
 }
