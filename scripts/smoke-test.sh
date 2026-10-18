@@ -3,17 +3,19 @@
 # Usage: scripts/smoke-test.sh [path/to/lime]   (default: target/debug/lime)
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-LIME=${1:-$ROOT/target/debug/lime}
-export LIME_FFMPEG=${LIME_FFMPEG:-$ROOT/build/ffmpeg/bin/ffmpeg}
+LIME=$(cd "$(dirname "${1:-$ROOT/target/debug/lime}")" && pwd)/$(basename "${1:-lime}")
+FF=$ROOT/build/ffmpeg/bin/ffmpeg
+# Inside Lime.app the CLI must find its bundled ffmpeg on its own.
+case $LIME in *.app/*) ;; *) export LIME_FFMPEG=${LIME_FFMPEG:-$FF} ;; esac
 D=$(mktemp -d)
 trap 'rm -rf "$D"' EXIT
 cd "$D"
 fail=0
 
-$LIME_FFMPEG -hide_banner -loglevel error -f lavfi -i testsrc=duration=4:size=320x240:rate=25 -f lavfi -i sine=duration=4 \
+$FF -hide_banner -loglevel error -f lavfi -i testsrc=duration=4:size=320x240:rate=25 -f lavfi -i sine=duration=4 \
   -c:v h264_videotoolbox -c:a aac_at -shortest clip.mp4
-$LIME_FFMPEG -hide_banner -loglevel error -f lavfi -i sine=duration=3 tone.wav
-$LIME_FFMPEG -hide_banner -loglevel error -f lavfi -i testsrc=size=400x300 -frames:v 1 pic.png
+$FF -hide_banner -loglevel error -f lavfi -i sine=duration=3 tone.wav
+$FF -hide_banner -loglevel error -f lavfi -i testsrc=size=400x300 -frames:v 1 pic.png
 printf '# Report\n\nSome *text*.\n' > doc.md
 printf 'a,b\n1,2\n' > t.csv
 printf '1\n00:00:01,000 --> 00:00:02,000\nHi\n' > s.srt
