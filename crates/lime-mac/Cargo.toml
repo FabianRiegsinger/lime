@@ -1,0 +1,11 @@
+[package]
+name = "lime-mac"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lime-core = { version = "0.1.0", path = "../lime-core" }
+objc2 = "0.6.5"
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"

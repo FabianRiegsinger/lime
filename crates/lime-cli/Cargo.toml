@@ -1,0 +1,9 @@
+[package]
+name = "lime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+lime-core = { version = "0.1.0", path = "../lime-core" }
