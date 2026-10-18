@@ -13,7 +13,7 @@ cd "$D"
 fail=0
 
 $FF -hide_banner -loglevel error -f lavfi -i testsrc=duration=4:size=320x240:rate=25 -f lavfi -i sine=duration=4 \
-  -c:v h264_videotoolbox -c:a aac_at -shortest clip.mp4
+  -c:v h264_videotoolbox -allow_sw 1 -c:a aac_at -shortest clip.mp4
 $FF -hide_banner -loglevel error -f lavfi -i sine=duration=3 tone.wav
 $FF -hide_banner -loglevel error -f lavfi -i testsrc=size=400x300 -frames:v 1 pic.png
 printf '# Report\n\nSome *text*.\n' > doc.md
