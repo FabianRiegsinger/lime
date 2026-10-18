@@ -159,13 +159,13 @@ fn make_panel(mtm: MainThreadMarker) -> (Retained<NSPanel>, Retained<NSTextField
         false,
     );
     panel.setLevel(NSFloatingWindowLevel);
-    panel.setBackgroundColor(Some(&NSColor::colorWithWhite_alpha(0.1, 0.92)));
+    panel.setBackgroundColor(Some(&NSColor::windowBackgroundColor()));
     panel.setHidesOnDeactivate(false);
     panel.setCollectionBehavior(NSWindowCollectionBehavior::CanJoinAllSpaces);
     unsafe { panel.setReleasedWhenClosed(false) };
     let label = NSTextField::wrappingLabelWithString(ns_string!(""), mtm);
     label.setSelectable(false);
-    label.setTextColor(Some(&NSColor::whiteColor()));
+    label.setTextColor(Some(&NSColor::labelColor()));
     if let Some(content) = panel.contentView() {
         content.addSubview(&label);
     }

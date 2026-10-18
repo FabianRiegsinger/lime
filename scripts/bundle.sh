@@ -12,6 +12,14 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp target/release/lime-mac target/release/lime "$APP/Contents/MacOS/"
 cp build/ffmpeg/bin/ffmpeg "$APP/Contents/Resources/ffmpeg"
 strip -x "$APP/Contents/Resources/ffmpeg"
+ICONSET=build/Lime.iconset
+rm -rf "$ICONSET" && mkdir -p "$ICONSET"
+for s in 16 32 128 256 512; do
+  sips -z $s $s assets/icon-1024.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+  sips -z $((s * 2)) $((s * 2)) assets/icon-1024.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Lime.icns"
+rm -rf "$ICONSET"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -21,6 +29,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>Lime</string>
   <key>CFBundleDisplayName</key><string>Lime</string>
   <key>CFBundleIdentifier</key><string>com.fabianriegsinger.lime</string>
+  <key>CFBundleIconFile</key><string>Lime</string>
   <key>CFBundleExecutable</key><string>lime-mac</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleVersion</key><string>$VERSION</string>

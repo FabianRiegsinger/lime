@@ -8,12 +8,12 @@ mod wheel;
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
-use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEvent, NSMenu, NSMenuItem, NSPasteboard,
-    NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSPopUpButton, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEvent, NSImage, NSMenu, NSMenuItem, NSPasteboard,
+    NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSPopUpButton, NSSlider, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
 };
-use objc2_foundation::{ns_string, NSNotification, NSObject, NSObjectProtocol, NSString, NSTimer, NSURL};
+use objc2_foundation::{ns_string, NSData, NSNotification, NSObject, NSObjectProtocol, NSSize, NSString, NSTimer, NSURL};
 use std::cell::RefCell;
 use std::path::PathBuf;
 
@@ -128,6 +128,7 @@ define_class!(
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _n: &NSNotification) {
             let mtm = self.mtm();
+            settings::apply_appearance(mtm);
             STATE.with_borrow_mut(|s| {
                 s.drag_count = NSPasteboard::pasteboardWithName(unsafe { NSPasteboardNameDrag }).changeCount();
                 s.status_item = Some(status_item(mtm, self));
@@ -135,6 +136,11 @@ define_class!(
             unsafe {
                 NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(0.03, self, sel!(tick:), None, true);
             }
+        }
+
+        #[unsafe(method(applicationDidResignActive:))]
+        fn did_resign_active(&self, _n: &NSNotification) {
+            settings::hide();
         }
     }
 
@@ -153,13 +159,24 @@ define_class!(
         fn setting_changed(&self, sender: &NSPopUpButton) {
             settings::changed(sender);
         }
+
+        #[unsafe(method(glassChanged:))]
+        fn glass_changed(&self, sender: &NSSlider) {
+            settings::glass_changed(sender);
+        }
     }
 );
 
 fn status_item(mtm: MainThreadMarker, delegate: &Delegate) -> Retained<NSStatusItem> {
     let item = NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
     if let Some(button) = item.button(mtm) {
-        button.setTitle(ns_string!("🍋‍🟩"));
+        // Template image: macOS draws it black on light menu bars and white on dark ones.
+        let data = NSData::with_bytes(include_bytes!("../../../assets/menubar.png"));
+        if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+            image.setSize(NSSize::new(22.0, 22.0));
+            image.setTemplate(true);
+            button.setImage(Some(&image));
+        }
     }
     let menu = NSMenu::new(mtm);
     let add = |title: &NSString, action, key: &NSString| {
