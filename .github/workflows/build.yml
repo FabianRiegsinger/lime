@@ -1,0 +1,111 @@
+# Builds Lime for every platform. The menu-bar app is AppKit, so macOS gets Lime.app;
+# Windows and Linux get the `lime` command-line tool (ffmpeg must be on PATH there).
+# A pushed `v*` tag also publishes everything to that GitHub release.
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    env:
+      # Homebrew codec libraries and ffmpeg otherwise target the runner's macOS, above Lime's minimum.
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Codec libraries
+        run: brew install lame mpg123 opus libvpx webp libvorbis pkgconf
+      - uses: actions/cache@v4
+        with:
+          path: |
+            build/ffmpeg
+            build/ffmpeg-src
+          key: ffmpeg-${{ matrix.arch }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+      - name: ffmpeg
+        run: "[ -x build/ffmpeg/bin/ffmpeg ] || scripts/build-ffmpeg.sh"
+      - name: Test
+        run: cargo test --workspace
+      - name: Bundle
+        run: scripts/bundle.sh
+      - name: Smoke test
+        run: scripts/smoke-test.sh build/Lime.app/Contents/MacOS/lime
+      - name: Package
+        run: ditto -c -k --keepParent build/Lime.app "Lime-macos-${{ matrix.arch }}.zip"
+      - name: Third-party sources
+        if: matrix.arch == 'arm64'
+        run: scripts/package-sources.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            Lime-macos-${{ matrix.arch }}.zip
+            build/lime-*-third-party-sources.tar.gz
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p lime
+      - name: Check
+        run: target/release/lime ops convert README.md
+      - name: Package
+        run: tar -czf lime-linux-x86_64.tar.gz -C target/release lime
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: lime-linux-x86_64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p lime
+      - name: Check
+        run: target/release/lime.exe ops convert README.md
+      - name: Package
+        run: Compress-Archive -Path target/release/lime.exe -DestinationPath lime-windows-x86_64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: lime-windows-x86_64.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            Lime-macos-*.zip
+            build/lime-*-third-party-sources.tar.gz
+            lime-linux-x86_64.tar.gz
+            lime-windows-x86_64.zip
