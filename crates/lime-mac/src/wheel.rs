@@ -4,9 +4,9 @@ use crate::actions::Action;
 use crate::WheelKind;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
-use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAffineTransformNSAppKitAdditions, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBackingStoreType, NSBezierPath, NSColor, NSDragOperation, NSDraggingInfo, NSEvent, NSFont, NSFontAttributeName,
+    NSAffineTransformNSAppKitAdditions, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBackingStoreType, NSBezierPath, NSColor, NSDragOperation, NSDraggingInfo, NSEvent, NSFont, NSFontAttributeName, NSGradient, NSShadow,
     NSForegroundColorAttributeName, NSPanel, NSPasteboardTypeFileURL, NSWindow, NSGlassEffectView, NSGlassEffectViewStyle, NSGraphicsContext, NSPopUpMenuWindowLevel, NSStringDrawing, NSView,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
@@ -100,6 +100,50 @@ impl Palette {
             }
         }
     }
+}
+
+fn shadow(dx: f64, dy: f64, blur: f64, color: &NSColor) -> Retained<NSShadow> {
+    let s = NSShadow::new();
+    s.setShadowOffset(NSSize::new(dx, dy));
+    s.setShadowBlurRadius(blur);
+    s.setShadowColor(Some(color));
+    s
+}
+
+/// Soft drop shadow under `shape`; `lift` (points) makes a hovered button float higher.
+fn drop_shadow(shape: &NSBezierPath, color: &NSColor, lift: f64, dark: bool) {
+    NSGraphicsContext::saveGraphicsState_class();
+    shadow(0.0, -lift, lift * 2.5, &NSColor::colorWithWhite_alpha(0.0, if dark { 0.5 } else { 0.25 })).set();
+    color.setFill();
+    shape.fill();
+    NSGraphicsContext::restoreGraphicsState_class();
+}
+
+/// Matte top-lit face: a gentle vertical gradient plus a fine light rim just inside the edge.
+fn face(shape: &NSBezierPath, color: &NSColor, dark: bool) {
+    if let (Some(top), Some(bottom)) = (color.highlightWithLevel(0.18), color.shadowWithLevel(0.08)) {
+        if let Some(g) = NSGradient::initWithStartingColor_endingColor(NSGradient::alloc(), &bottom, &top) {
+            g.drawInBezierPath_angle(shape, 90.0);
+        }
+    }
+    NSGraphicsContext::saveGraphicsState_class();
+    shape.addClip();
+    NSColor::colorWithWhite_alpha(1.0, if dark { 0.12 } else { 0.5 }).setStroke();
+    shape.setLineWidth(2.0);
+    shape.stroke();
+    NSGraphicsContext::restoreGraphicsState_class();
+}
+
+/// Sinks `shape` into the surface with a shadow falling inside its top edge.
+fn inset(shape: &NSBezierPath, c: NSPoint, r: f64, dark: bool) {
+    NSGraphicsContext::saveGraphicsState_class();
+    shape.addClip();
+    shadow(0.0, -2.0, 5.0, &NSColor::colorWithWhite_alpha(0.0, if dark { 0.55 } else { 0.3 })).set();
+    NSColor::blackColor().setStroke();
+    let ring = circle(c, r + 6.0);
+    ring.setLineWidth(12.0);
+    ring.stroke();
+    NSGraphicsContext::restoreGraphicsState_class();
 }
 
 fn is_dark(view: &NSView) -> bool {
@@ -261,7 +305,8 @@ define_class!(
             let data = self.ivars().borrow();
             let c = NSPoint::new(SIZE / 2.0, SIZE / 2.0);
             let n = data.choices.len();
-            let p = Palette::new(is_dark(self), data.glass);
+            let dark = is_dark(self);
+            let p = Palette::new(dark, data.glass);
             let (pulp_out, pulp_in) = (OUTER - RIND - PITH, INNER + 1.0);
             if data.scale < 1.0 {
                 let t = NSAffineTransform::transform();
@@ -274,35 +319,57 @@ define_class!(
                 disc.setFill();
                 circle(c, DISC).fill();
             }
+            // A fine light edge catches the "light" around the disc.
+            let edge = circle(c, DISC - 0.5);
+            edge.setLineWidth(1.0);
+            NSColor::colorWithWhite_alpha(1.0, if dark { 0.14 } else { 0.6 }).setStroke();
+            edge.stroke();
 
             let step = 360.0 / n.max(1) as f64;
+            let shapes: Vec<_> = (0..n)
+                .map(|i| {
+                    let (start, end) = (90.0 - i as f64 * step, 90.0 - (i + 1) as f64 * step);
+                    if n > 1 {
+                        segment(c, pulp_in, pulp_out, start, end)
+                    } else {
+                        let ring = circle(c, pulp_out);
+                        ring.appendBezierPath(&circle(c, pulp_in));
+                        ring.setWindingRule(objc2_app_kit::NSWindingRule::EvenOdd);
+                        Some(ring)
+                    }
+                })
+                .collect();
+            let color = |i: usize| if data.hovered == Some(i) { &p.pulp_hover } else { &p.pulp };
+            // Shadows first, so no button's shadow falls across a neighbour.
+            for (i, shape) in shapes.iter().enumerate() {
+                if let Some(shape) = shape {
+                    drop_shadow(shape, color(i), if data.hovered == Some(i) { 3.5 } else { 1.2 }, dark);
+                }
+            }
             let label_attrs = attrs(if n > 9 { 11.0 } else { 13.0 }, &p.text, true);
+            // Light mode engraves the labels with a white line below; dark mode lifts them with a black one.
+            let emboss = shadow(0.0, -1.0, 0.0, &NSColor::colorWithWhite_alpha(if dark { 0.0 } else { 1.0 }, if dark { 0.5 } else { 0.45 }));
             for (i, choice) in data.choices.iter().enumerate() {
                 let (start, end) = (90.0 - i as f64 * step, 90.0 - (i + 1) as f64 * step);
-                let shape = if n > 1 {
-                    segment(c, pulp_in, pulp_out, start, end)
-                } else {
-                    let ring = circle(c, pulp_out);
-                    ring.appendBezierPath(&circle(c, pulp_in));
-                    ring.setWindingRule(objc2_app_kit::NSWindingRule::EvenOdd);
-                    Some(ring)
-                };
-                if let Some(shape) = shape {
-                    if data.hovered == Some(i) { p.pulp_hover.setFill() } else { p.pulp.setFill() };
-                    shape.fill();
+                if let Some(shape) = &shapes[i] {
+                    face(shape, color(i), dark);
                     if let Some(busy) = data.busy.as_ref().filter(|b| b.index == i && b.shown > 0.0) {
                         NSGraphicsContext::saveGraphicsState_class();
                         shape.addClip();
-                        p.pulp_hover.setFill();
-                        circle(c, pulp_in + (pulp_out - pulp_in) * busy.shown).fill();
+                        face(&circle(c, pulp_in + (pulp_out - pulp_in) * busy.shown), &p.pulp_hover, dark);
                         NSGraphicsContext::restoreGraphicsState_class();
                     }
                 }
+                NSGraphicsContext::saveGraphicsState_class();
+                emboss.set();
                 draw_centered(&choice.label(), polar(c, (INNER + pulp_out) / 2.0, (start + end) / 2.0), &label_attrs);
+                NSGraphicsContext::restoreGraphicsState_class();
             }
 
+            let hub = circle(c, INNER - 4.0);
             p.hub.setFill();
-            circle(c, INNER - 4.0).fill();
+            hub.fill();
+            inset(&hub, c, INNER - 4.0, dark);
             let title = data.kind.map(WheelKind::title).unwrap_or("");
             if n == 0 {
                 draw_centered("Nothing to do", NSPoint::new(c.x, c.y + INNER + 40.0), &attrs(13.0, &p.text, true));
