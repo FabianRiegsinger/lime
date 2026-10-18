@@ -1,4 +1,5 @@
-//! Runs operations through the `lime` CLI on background threads and shows their progress.
+//! Runs operations through the `lime` CLI on background threads. Progress shows on the wheel;
+//! only failures get a panel.
 
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
@@ -9,13 +10,14 @@ use objc2_app_kit::{
 use objc2_foundation::{ns_string, NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;
 use std::path::PathBuf;
-use std::process::Command;
+use std::io::{BufRead, BufReader, Read};
+use std::process::{Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 enum Status {
     Running,
-    Done(String),
+    Done,
     Failed(String),
 }
 
@@ -23,6 +25,28 @@ struct Job {
     title: String,
     status: Status,
     finished: Option<Instant>,
+    started: Instant,
+    /// Last `progress` line from the CLI, if it sent any.
+    progress: Option<f64>,
+}
+
+pub enum Progress {
+    Running(f64),
+    Done,
+    Failed,
+}
+
+/// How far job `index` is. Without reports from the CLI the estimate creeps towards 90%.
+pub fn progress(index: usize) -> Progress {
+    let jobs = JOBS.lock().unwrap();
+    let Some(job) = jobs.get(index) else { return Progress::Done };
+    match job.status {
+        Status::Running => {
+            Progress::Running(job.progress.unwrap_or_else(|| 0.9 * (1.0 - (-job.started.elapsed().as_secs_f64() / 3.0).exp())))
+        }
+        Status::Done => Progress::Done,
+        Status::Failed(_) => Progress::Failed,
+    }
 }
 
 static JOBS: Mutex<Vec<Job>> = Mutex::new(Vec::new());
@@ -60,20 +84,24 @@ fn summary(files: &[PathBuf]) -> String {
     }
 }
 
-pub fn start(mtm: MainThreadMarker, op: lime_core::Op, files: Vec<PathBuf>) {
+/// Starts `op` and returns its job index; `None` when there is nothing to do or the user cancelled.
+pub fn start(mtm: MainThreadMarker, op: lime_core::Op, files: Vec<PathBuf>) -> Option<usize> {
     if files.is_empty() {
-        return;
+        return None;
     }
     let arg = match &op.param {
-        Some(p) => match ask(mtm, &op, p) {
-            Some(v) => Some(v),
-            None => return,
-        },
+        Some(p) => Some(ask(mtm, &op, p)?),
         None => None,
     };
     let index = {
         let mut jobs = JOBS.lock().unwrap();
-        jobs.push(Job { title: format!("{} → {}", summary(&files), op.label), status: Status::Running, finished: None });
+        jobs.push(Job {
+            title: format!("{} → {}", summary(&files), op.label),
+            status: Status::Running,
+            finished: None,
+            started: Instant::now(),
+            progress: None,
+        });
         jobs.len() - 1
     };
     std::thread::spawn(move || {
@@ -82,16 +110,10 @@ pub fn start(mtm: MainThreadMarker, op: lime_core::Op, files: Vec<PathBuf>) {
         if let Some(a) = &arg {
             cmd.args(["--arg", a]);
         }
-        cmd.args(&files);
-        let status = match cmd.output() {
-            Ok(out) if out.status.success() => {
-                let made: Vec<String> = String::from_utf8_lossy(&out.stdout)
-                    .lines()
-                    .filter_map(|l| PathBuf::from(l).file_name().map(|n| n.to_string_lossy().into_owned()))
-                    .collect();
-                Status::Done(made.join(", "))
-            }
-            Ok(out) => Status::Failed(String::from_utf8_lossy(&out.stderr).trim().trim_start_matches("lime: ").to_string()),
+        cmd.args(&files).env("LIME_PROGRESS", "1").stdout(Stdio::piped()).stderr(Stdio::piped());
+        let status = match run(&mut cmd, index) {
+            Ok((true, ..)) => Status::Done,
+            Ok((false, _, err)) => Status::Failed(err.trim().trim_start_matches("lime: ").to_string()),
             Err(e) => Status::Failed(format!("could not start lime: {e}")),
         };
         let mut jobs = JOBS.lock().unwrap();
@@ -100,13 +122,42 @@ pub fn start(mtm: MainThreadMarker, op: lime_core::Op, files: Vec<PathBuf>) {
             job.finished = Some(Instant::now());
         }
     });
+    Some(index)
+}
+
+/// Runs the CLI, feeding its `progress` lines into job `index`. Returns (success, stdout, other stderr).
+fn run(cmd: &mut Command, index: usize) -> std::io::Result<(bool, String, String)> {
+    let mut child = cmd.spawn()?;
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stdout.read_to_string(&mut s);
+        s
+    });
+    let mut err = String::new();
+    for line in BufReader::new(child.stderr.take().expect("piped stderr")).lines().map_while(Result::ok) {
+        match line.strip_prefix("progress ").and_then(|f| f.parse::<f64>().ok()) {
+            Some(f) => {
+                if let Some(job) = JOBS.lock().unwrap().get_mut(index) {
+                    job.progress = Some(job.progress.unwrap_or(0.0).max(f));
+                }
+            }
+            None => {
+                err += &line;
+                err.push('\n');
+            }
+        }
+    }
+    let ok = child.wait()?.success();
+    Ok((ok, reader.join().unwrap_or_default(), err))
 }
 
 pub fn report_error(_mtm: MainThreadMarker, message: &str) {
-    JOBS.lock().unwrap().push(Job { title: message.into(), status: Status::Failed(String::new()), finished: Some(Instant::now()) });
+    let now = Instant::now();
+    JOBS.lock().unwrap().push(Job { title: message.into(), status: Status::Failed(String::new()), finished: Some(now), started: now, progress: None });
 }
 
-/// Called every tick: redraws the progress panel and drops finished jobs after a while.
+/// Called every tick: shows failures in a panel and drops finished jobs after a while.
 pub fn refresh(mtm: MainThreadMarker) {
     let text = {
         let mut jobs = JOBS.lock().unwrap();
@@ -120,11 +171,10 @@ pub fn refresh(mtm: MainThreadMarker) {
             jobs.clear();
         }
         jobs.iter()
-            .map(|j| match &j.status {
-                Status::Running => format!("⏳  {}", j.title),
-                Status::Done(made) => format!("✅  {}\n      {made}", j.title),
-                Status::Failed(e) if e.is_empty() => format!("⚠️  {}", j.title),
-                Status::Failed(e) => format!("⚠️  {}\n      {e}", j.title),
+            .filter_map(|j| match &j.status {
+                Status::Running | Status::Done => None,
+                Status::Failed(e) if e.is_empty() => Some(format!("⚠️  {}", j.title)),
+                Status::Failed(e) => Some(format!("⚠️  {}\n      {e}", j.title)),
             })
             .collect::<Vec<_>>()
             .join("\n")

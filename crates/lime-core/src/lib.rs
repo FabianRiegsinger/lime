@@ -141,7 +141,16 @@ pub fn run(op_id: &str, inputs: &[PathBuf], arg: Option<&str>) -> Result<Vec<Pat
         }
     }
     if let Some(target) = op_id.strip_prefix("to:") {
-        return inputs.iter().map(|p| convert(p, target)).collect();
+        return inputs
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                util::set_part(i, inputs.len());
+                let made = convert(p, target);
+                util::report(1.0);
+                made
+            })
+            .collect();
     }
     let op = ops(Wheel::Tools, inputs)
         .into_iter()
@@ -162,7 +171,8 @@ pub fn run(op_id: &str, inputs: &[PathBuf], arg: Option<&str>) -> Result<Vec<Pat
         }]);
     }
     let mut out = vec![];
-    for p in inputs {
+    for (i, p) in inputs.iter().enumerate() {
+        util::set_part(i, inputs.len());
         out.extend(match kind(p) {
             Kind::Image => media::image_tool(op_id, p, arg)?,
             Kind::Audio | Kind::Video => media::av_tool(op_id, p, arg)?,
@@ -172,6 +182,7 @@ pub fn run(op_id: &str, inputs: &[PathBuf], arg: Option<&str>) -> Result<Vec<Pat
             Kind::Archive => vec![archive::extract(p)?],
             _ => unreachable!("tools_for offers no other tools"),
         });
+        util::report(1.0);
     }
     Ok(out)
 }

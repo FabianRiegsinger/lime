@@ -6,13 +6,17 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool, ProtocolObject};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBackingStoreType, NSBezierPath, NSColor, NSDragOperation, NSDraggingInfo, NSEvent, NSFont, NSFontAttributeName,
-    NSForegroundColorAttributeName, NSPanel, NSPasteboardTypeFileURL, NSWindow, NSGlassEffectView, NSGlassEffectViewStyle, NSPopUpMenuWindowLevel, NSStringDrawing, NSView,
+    NSAffineTransformNSAppKitAdditions, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSBackingStoreType, NSBezierPath, NSColor, NSDragOperation, NSDraggingInfo, NSEvent, NSFont, NSFontAttributeName,
+    NSForegroundColorAttributeName, NSPanel, NSPasteboardTypeFileURL, NSWindow, NSGlassEffectView, NSGlassEffectViewStyle, NSGraphicsContext, NSPopUpMenuWindowLevel, NSStringDrawing, NSView,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSDictionary, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSAffineTransform, NSArray, NSDictionary, NSPoint, NSRect, NSSize, NSString};
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+/// How long the wheel takes to grow out of its centre.
+const OPEN_SECS: f64 = 0.2;
 
 const SIZE: f64 = 340.0;
 const OUTER: f64 = 160.0;
@@ -40,6 +44,17 @@ fn rgb(r: f64, g: f64, b: f64, a: f64) -> Retained<NSColor> {
     NSColor::colorWithSRGBRed_green_blue_alpha(r, g, b, a)
 }
 
+/// Matte lime for the hovered button and the progress fill.
+struct Lime(f64, f64, f64);
+const LIME_LIGHT: Lime = Lime(0.69, 0.83, 0.33);
+const LIME_DARK: Lime = Lime(0.45, 0.62, 0.18);
+
+impl Lime {
+    fn rgb(&self) -> Retained<NSColor> {
+        rgb(self.0, self.1, self.2, 1.0)
+    }
+}
+
 impl Palette {
     fn new(dark: bool, glass: Option<f64>) -> Self {
         let Some(glass) = glass else {
@@ -47,8 +62,8 @@ impl Palette {
             return if dark {
                 Palette {
                     disc: Some(grey(0.18, 0.97)),
-                    pulp: grey(0.27, 1.0),
-                    pulp_hover: grey(0.40, 1.0),
+                    pulp: grey(0.33, 1.0),
+                    pulp_hover: LIME_DARK.rgb(),
                     hub: grey(0.18, 1.0),
                     text: grey(1.0, 0.95),
                     dim: grey(1.0, 0.6),
@@ -56,8 +71,8 @@ impl Palette {
             } else {
                 Palette {
                     disc: Some(grey(0.95, 0.97)),
-                    pulp: grey(0.85, 1.0),
-                    pulp_hover: grey(0.74, 1.0),
+                    pulp: grey(0.80, 1.0),
+                    pulp_hover: LIME_LIGHT.rgb(),
                     hub: grey(0.95, 1.0),
                     text: grey(0.0, 0.85),
                     dim: grey(0.0, 0.5),
@@ -68,8 +83,8 @@ impl Palette {
         if dark {
             Palette {
                 disc,
-                pulp: rgb(0.30, 0.30, 0.31, 0.82),
-                pulp_hover: rgb(0.42, 0.42, 0.43, 0.9),
+                pulp: rgb(0.38, 0.38, 0.40, 0.92),
+                pulp_hover: LIME_DARK.rgb(),
                 hub: rgb(0.0, 0.0, 0.0, 0.18),
                 text: rgb(1.0, 1.0, 1.0, 0.95),
                 dim: rgb(1.0, 1.0, 1.0, 0.6),
@@ -77,8 +92,8 @@ impl Palette {
         } else {
             Palette {
                 disc,
-                pulp: rgb(0.96, 0.96, 0.97, 0.82),
-                pulp_hover: rgb(1.0, 1.0, 1.0, 0.97),
+                pulp: rgb(0.78, 0.78, 0.80, 0.92),
+                pulp_hover: LIME_LIGHT.rgb(),
                 hub: rgb(1.0, 1.0, 1.0, 0.35),
                 text: rgb(0.0, 0.0, 0.0, 0.85),
                 dim: rgb(0.0, 0.0, 0.0, 0.5),
@@ -151,6 +166,19 @@ pub struct WheelData {
     glass: Option<f64>,
     /// Files chosen in Finder when the wheel was opened from the keyboard; `None` during a drag.
     files: Option<Vec<PathBuf>>,
+    /// When the wheel opened, and how far its grow-in animation is (0..1).
+    opened: Option<Instant>,
+    scale: f64,
+    busy: Option<Busy>,
+}
+
+/// A chosen button filling from its inner to its outer edge while the job runs.
+struct Busy {
+    index: usize,
+    /// Fill drawn now, easing towards `target`.
+    shown: f64,
+    target: f64,
+    done: Option<Instant>,
 }
 
 /// The choice `delta` steps clockwise from `current`, wrapping around; the first one when nothing is selected.
@@ -182,11 +210,13 @@ define_class!(
             true
         }
 
-        /// Clicking elsewhere closes a keyboard-opened wheel.
+        /// Clicking elsewhere closes a keyboard-opened wheel, unless it is showing progress.
         #[unsafe(method(resignKeyWindow))]
         fn resign_key(&self) {
             unsafe { msg_send![super(self), resignKeyWindow] }
-            hide();
+            if !is_busy() {
+                hide();
+            }
         }
     }
 );
@@ -233,6 +263,13 @@ define_class!(
             let n = data.choices.len();
             let p = Palette::new(is_dark(self), data.glass);
             let (pulp_out, pulp_in) = (OUTER - RIND - PITH, INNER + 1.0);
+            if data.scale < 1.0 {
+                let t = NSAffineTransform::transform();
+                t.translateXBy_yBy(c.x, c.y);
+                t.scaleBy(data.scale.max(0.01));
+                t.translateXBy_yBy(-c.x, -c.y);
+                t.concat();
+            }
             if let Some(disc) = &p.disc {
                 disc.setFill();
                 circle(c, DISC).fill();
@@ -240,20 +277,25 @@ define_class!(
 
             let step = 360.0 / n.max(1) as f64;
             let label_attrs = attrs(if n > 9 { 11.0 } else { 13.0 }, &p.text, true);
-            if n <= 1 {
-                let ring = circle(c, pulp_out);
-                ring.appendBezierPath(&circle(c, pulp_in));
-                ring.setWindingRule(objc2_app_kit::NSWindingRule::EvenOdd);
-                if data.hovered == Some(0) { p.pulp_hover.setFill() } else { p.pulp.setFill() };
-                ring.fill();
-            }
             for (i, choice) in data.choices.iter().enumerate() {
                 let (start, end) = (90.0 - i as f64 * step, 90.0 - (i + 1) as f64 * step);
-                let color = if data.hovered == Some(i) { &p.pulp_hover } else { &p.pulp };
-                if n > 1 {
-                    if let Some(seg) = segment(c, pulp_in, pulp_out, start, end) {
-                        color.setFill();
-                        seg.fill();
+                let shape = if n > 1 {
+                    segment(c, pulp_in, pulp_out, start, end)
+                } else {
+                    let ring = circle(c, pulp_out);
+                    ring.appendBezierPath(&circle(c, pulp_in));
+                    ring.setWindingRule(objc2_app_kit::NSWindingRule::EvenOdd);
+                    Some(ring)
+                };
+                if let Some(shape) = shape {
+                    if data.hovered == Some(i) { p.pulp_hover.setFill() } else { p.pulp.setFill() };
+                    shape.fill();
+                    if let Some(busy) = data.busy.as_ref().filter(|b| b.index == i && b.shown > 0.0) {
+                        NSGraphicsContext::saveGraphicsState_class();
+                        shape.addClip();
+                        p.pulp_hover.setFill();
+                        circle(c, pulp_in + (pulp_out - pulp_in) * busy.shown).fill();
+                        NSGraphicsContext::restoreGraphicsState_class();
                     }
                 }
                 draw_centered(&choice.label(), polar(c, (INNER + pulp_out) / 2.0, (start + end) / 2.0), &label_attrs);
@@ -285,12 +327,15 @@ define_class!(
 
         #[unsafe(method(performDragOperation:))]
         fn perform_drag(&self, info: &ProtocolObject<dyn NSDraggingInfo>) -> Bool {
-            let choice = {
+            let picked = {
                 let data = self.ivars().borrow();
-                data.hovered.and_then(|i| data.choices.get(i).cloned())
+                data.hovered.and_then(|i| Some((i, data.choices.get(i)?.clone())))
             };
-            hide();
-            let Some(choice) = choice else { return Bool::NO };
+            let Some((index, choice)) = picked else {
+                hide();
+                return Bool::NO;
+            };
+            self.begin_busy(index);
             crate::queue(choice, crate::files_on(&info.draggingPasteboard()));
             Bool::YES
         }
@@ -302,21 +347,27 @@ define_class!(
 
         #[unsafe(method(keyDown:))]
         fn key_down(&self, event: &NSEvent) {
-            let (hovered, n) = {
+            let (hovered, n, busy) = {
                 let data = self.ivars().borrow();
-                (data.hovered, data.choices.len())
+                (data.hovered, data.choices.len(), data.busy.is_some())
             };
+            if busy {
+                return;
+            }
             match event.keyCode() {
                 KEY_RIGHT | KEY_DOWN => self.set_hovered(step(hovered, n, 1)),
                 KEY_LEFT | KEY_UP => self.set_hovered(step(hovered, n, -1)),
                 KEY_RETURN | KEY_ENTER => {
                     let picked = {
                         let data = self.ivars().borrow();
-                        data.hovered.and_then(|i| data.choices.get(i).cloned()).zip(data.files.clone())
+                        data.hovered.and_then(|i| Some((i, data.choices.get(i)?.clone(), data.files.clone()?)))
                     };
-                    hide();
-                    if let Some((choice, files)) = picked {
-                        crate::queue(choice, files);
+                    match picked {
+                        Some((index, choice, files)) => {
+                            self.begin_busy(index);
+                            crate::queue(choice, files);
+                        }
+                        None => hide(),
                     }
                 }
                 KEY_ESCAPE => hide(),
@@ -329,7 +380,7 @@ define_class!(
         fn flags_changed(&self, event: &NSEvent) {
             let (kind, files) = {
                 let data = self.ivars().borrow();
-                (data.kind, data.files.clone())
+                (data.kind, data.files.clone().filter(|_| data.busy.is_none()))
             };
             let Some(files) = files else { return };
             if let Some(next) = crate::settings::wheel_for(event.modifierFlags()).filter(|k| Some(*k) != kind) {
@@ -350,7 +401,13 @@ impl WheelView {
 
     fn track(&self, info: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
         let p = self.convertPoint_fromView(info.draggingLocation(), None);
-        let n = self.ivars().borrow().choices.len();
+        let (n, busy) = {
+            let data = self.ivars().borrow();
+            (data.choices.len(), data.busy.is_some())
+        };
+        if busy {
+            return NSDragOperation::None;
+        }
         let hit = segment_at(p, n);
         self.set_hovered(hit);
         if hit.is_some() {
@@ -358,6 +415,16 @@ impl WheelView {
         } else {
             NSDragOperation::None
         }
+    }
+
+    fn begin_busy(&self, index: usize) {
+        {
+            let mut data = self.ivars().borrow_mut();
+            data.hovered = None;
+            data.busy = Some(Busy { index, shown: 0.0, target: 0.0, done: None });
+        }
+        self.setNeedsDisplay(true);
+        crate::animate();
     }
 
     fn set_hovered(&self, h: Option<usize>) {
@@ -390,7 +457,8 @@ pub fn has_glass() -> bool {
 
 pub fn shown() -> Option<WheelKind> {
     WHEEL.with_borrow(|w| {
-        w.as_ref().filter(|(panel, ..)| panel.isVisible()).and_then(|(_, view, _)| view.ivars().borrow().kind)
+        // A wheel showing progress counts as closed, so a new drag gets a fresh one.
+        w.as_ref().filter(|(panel, ..)| panel.isVisible()).map(|(_, view, _)| view.ivars().borrow()).filter(|d| d.busy.is_none()).and_then(|d| d.kind)
     })
 }
 
@@ -435,15 +503,18 @@ pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoi
             panel.setContentView(Some(&root));
             (panel, view, glass)
         });
-        // Keep the wheel where it first appeared when switching kinds mid-drag.
-        if !panel.isVisible() {
+        // Keep the wheel where it first appeared when switching kinds mid-drag; grow it in when it is new.
+        let fresh = !panel.isVisible() || view.ivars().borrow().busy.is_some();
+        if fresh {
             panel.setFrameOrigin(NSPoint::new(at.x - SIZE / 2.0, at.y - SIZE / 2.0));
         }
+        let (opened, scale) = if fresh { (Some(Instant::now()), 0.0) } else { (view.ivars().borrow().opened, view.ivars().borrow().scale) };
         // The glass stays clear; the view paints a solid disc over it that fades out as glassiness rises.
         let g = glass.as_ref().map(|_| crate::settings::glassiness());
         let hovered = if keyboard && !choices.is_empty() { Some(0) } else { None };
         let files = keyboard.then(|| files.to_vec());
-        *view.ivars().borrow_mut() = WheelData { kind: Some(kind), choices, hovered, glass: g, files };
+        *view.ivars().borrow_mut() = WheelData { kind: Some(kind), choices, hovered, glass: g, files, opened, scale, busy: None };
+        place(panel, glass.as_deref(), scale);
         view.setNeedsDisplay(true);
         view.displayIfNeeded();
         panel.invalidateShadow(); // the shadow follows the drawn circle, not the square panel
@@ -454,13 +525,87 @@ pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoi
             panel.orderFrontRegardless();
         }
     });
+    crate::animate();
+}
+
+/// Sizes the glass disc and fades the panel for grow-in step `scale` (0..1).
+fn place(panel: &NSPanel, glass: Option<&NSGlassEffectView>, scale: f64) {
+    panel.setAlphaValue(scale);
+    if let Some(glass) = glass {
+        let r = DISC * scale;
+        glass.setFrame(NSRect::new(NSPoint::new(SIZE / 2.0 - r, SIZE / 2.0 - r), NSSize::new(r * 2.0, r * 2.0)));
+        glass.setCornerRadius(r);
+    }
+}
+
+/// Runs `f` on the wheel's progress state, if a button is filling.
+fn with_busy(f: impl FnOnce(&mut Busy)) {
+    WHEEL.with_borrow(|w| {
+        if let Some((_, view, _)) = w {
+            if let Some(busy) = view.ivars().borrow_mut().busy.as_mut() {
+                f(busy);
+            }
+        }
+    });
+}
+
+pub fn is_busy() -> bool {
+    WHEEL.with(|w| w.try_borrow().ok().and_then(|w| w.as_ref().map(|(_, view, _)| view.ivars().borrow().busy.is_some())).unwrap_or(false))
+}
+
+/// Moves the filling button towards `f` (0..1); it never shrinks.
+pub fn progress(f: f64) {
+    with_busy(|b| b.target = b.target.max(f.min(1.0)));
+}
+
+/// Fills the button completely, then closes the wheel.
+pub fn finish() {
+    with_busy(|b| {
+        b.target = 1.0;
+        b.done.get_or_insert_with(Instant::now);
+    });
+}
+
+/// One animation frame: grow-in and progress fill. False once nothing moves any more.
+pub fn animate() -> bool {
+    WHEEL.with_borrow(|w| {
+        let Some((panel, view, glass)) = w else { return false };
+        if !panel.isVisible() {
+            return false;
+        }
+        let (scale, opening, busy, close) = {
+            let mut d = view.ivars().borrow_mut();
+            let t = d.opened.map_or(1.0, |o| (o.elapsed().as_secs_f64() / OPEN_SECS).min(1.0));
+            d.scale = 1.0 - (1.0 - t).powi(3); // ease out
+            let close = d.busy.as_mut().is_some_and(|b| {
+                b.shown += (b.target - b.shown) * 0.25;
+                if b.target - b.shown < 0.003 {
+                    b.shown = b.target;
+                }
+                b.shown >= 1.0 && b.done.is_some_and(|t| t.elapsed() > Duration::from_millis(250))
+            });
+            if close {
+                d.busy = None;
+            }
+            (d.scale, t < 1.0, d.busy.is_some(), close)
+        };
+        place(panel, glass.as_deref(), scale);
+        view.setNeedsDisplay(true);
+        if close {
+            panel.orderOut(None);
+        }
+        opening || busy
+    })
 }
 
 pub fn hide() {
     // try_borrow: ordering out resigns key, and resignKeyWindow calls back in here.
     WHEEL.with(|w| {
         if let Ok(w) = w.try_borrow() {
-            if let Some((panel, ..)) = &*w {
+            if let Some((panel, view, _)) = &*w {
+                if let Ok(mut data) = view.ivars().try_borrow_mut() {
+                    data.busy = None;
+                }
                 panel.orderOut(None);
             }
         }

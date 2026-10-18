@@ -10,6 +10,8 @@ Results are saved as new files next to the original; originals are never changed
 | Command              | Tools   | Compress, resize, trim, split, merge, … |
 | Control              | Actions | AirDrop, Float, Copy, Move, Copy Path, Terminal |
 
+After you drop, the chosen button fills with lime from its inner to its outer edge as the job runs, and the wheel closes when it is done. Failures show in a small panel.
+
 The wheel stays open after you release the key. Press another wheel key to switch wheels, or drop on the centre to cancel.
 
 **Keyboard:** select files in Finder and press **Option-Return** to open the Convert wheel. Use the arrow keys to choose, Return to apply and Escape to cancel. Hold a wheel key to switch wheels. The first time, macOS asks whether Lime may control Finder; Lime needs this to read the selection. (Plain Return would clash with renaming in Finder.)

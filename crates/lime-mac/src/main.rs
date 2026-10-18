@@ -49,6 +49,12 @@ struct State {
     /// Ticks since the mouse was released while a wheel was shown.
     released_ticks: u32,
     pending: Option<(wheel::Choice, Vec<PathBuf>)>,
+    /// An action waiting for its button to finish filling, so a dialog it opens does not cover the wheel.
+    pending_action: Option<(actions::Action, Vec<PathBuf>)>,
+    /// The job whose progress the wheel shows.
+    wheel_job: Option<usize>,
+    /// Runs at 60 fps only while the wheel animates; the regular tick is too coarse.
+    animation: Option<Retained<NSTimer>>,
 }
 
 thread_local! {
@@ -67,6 +73,18 @@ pub fn files_on(pb: &NSPasteboard) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Starts the animation timer unless it is already running.
+pub fn animate() {
+    STATE.with_borrow_mut(|s| {
+        if s.animation.is_none() {
+            let delegate = s.delegate.as_ref().expect("delegate is set in main");
+            s.animation = Some(unsafe {
+                NSTimer::scheduledTimerWithTimeInterval_target_selector_userInfo_repeats(1.0 / 60.0, delegate, sel!(animate:), None, true)
+            });
+        }
+    });
+}
+
 /// Queues a dropped choice; it runs on the next tick so the drag session can finish first.
 pub fn queue(choice: wheel::Choice, files: Vec<PathBuf>) {
     STATE.with_borrow_mut(|s| s.pending = Some((choice, files)));
@@ -75,8 +93,39 @@ pub fn queue(choice: wheel::Choice, files: Vec<PathBuf>) {
 fn tick(mtm: MainThreadMarker) {
     if let Some((choice, files)) = STATE.with_borrow_mut(|s| s.pending.take()) {
         match choice {
-            wheel::Choice::Op(op) => jobs::start(mtm, op, files),
-            wheel::Choice::Action(a) => actions::run(mtm, a, &files),
+            wheel::Choice::Op(op) => match jobs::start(mtm, op, files) {
+                Some(job) => STATE.with_borrow_mut(|s| s.wheel_job = Some(job)),
+                None => wheel::hide(),
+            },
+            // Actions are instant: fill the button first, then act.
+            wheel::Choice::Action(a) => {
+                wheel::finish();
+                STATE.with_borrow_mut(|s| s.pending_action = Some((a, files)));
+            }
+        }
+    }
+    if !wheel::is_busy() {
+        if let Some((a, files)) = STATE.with_borrow_mut(|s| s.pending_action.take()) {
+            actions::run(mtm, a, &files);
+        }
+    }
+    if let Some(job) = STATE.with_borrow(|s| s.wheel_job) {
+        let done = match jobs::progress(job) {
+            jobs::Progress::Running(f) => {
+                wheel::progress(f);
+                false
+            }
+            jobs::Progress::Done => {
+                wheel::finish();
+                true
+            }
+            jobs::Progress::Failed => {
+                wheel::hide();
+                true
+            }
+        };
+        if done {
+            STATE.with_borrow_mut(|s| s.wheel_job = None);
         }
     }
     jobs::refresh(mtm);
@@ -89,7 +138,7 @@ fn tick(mtm: MainThreadMarker) {
             s.dragging = false;
             s.released_ticks += 1;
             // Give performDragOperation a moment before closing the wheel on a miss or cancel.
-            if s.released_ticks == 10 {
+            if s.released_ticks == 10 && !wheel::is_busy() {
                 wheel::hide();
             }
             return false;
@@ -151,6 +200,14 @@ define_class!(
         #[unsafe(method(tick:))]
         fn tick(&self, _t: &NSTimer) {
             tick(self.mtm());
+        }
+
+        #[unsafe(method(animate:))]
+        fn animate(&self, timer: &NSTimer) {
+            if !wheel::animate() {
+                timer.invalidate();
+                STATE.with_borrow_mut(|s| s.animation = None);
+            }
         }
 
         #[unsafe(method(openSettings:))]
