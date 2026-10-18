@@ -146,8 +146,12 @@ pub fn image_tool(op: &str, input: &Path, arg: Option<&str>) -> Result<Vec<PathB
 
 /// ffmpeg encoder arguments for an output extension.
 fn encode_args(target: &str) -> Result<Vec<&'static str>> {
+    // VideoToolbox's constant-quality mode exists only on Apple silicon; Intel Macs get a bitrate.
+    // shortcut: a fixed 8 Mbit/s on Intel, regardless of resolution; derive it from the input size if that matters.
+    let h264_rate: [&str; 2] = if cfg!(target_arch = "aarch64") { ["-q:v", "65"] } else { ["-b:v", "8M"] };
+    let h264 = ["-c:v", "h264_videotoolbox", "-allow_sw", "1", h264_rate[0], h264_rate[1], "-pix_fmt", "yuv420p", "-c:a", "aac_at", "-b:a", "192k"];
     let video: &[&str] = match target {
-        "mp4" | "mov" | "m4v" | "mkv" => &["-c:v", "h264_videotoolbox", "-allow_sw", "1", "-q:v", "65", "-pix_fmt", "yuv420p", "-c:a", "aac_at", "-b:a", "192k"],
+        "mp4" | "mov" | "m4v" | "mkv" => &h264,
         "webm" => &["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-row-mt", "1", "-deadline", "good", "-cpu-used", "4", "-c:a", "libopus"],
         // Motion JPEG and MP3 are patent-free; ffmpeg's MPEG-4 Part 2 encoder is left out of the build.
         "avi" => &["-c:v", "mjpeg", "-q:v", "3", "-pix_fmt", "yuvj420p", "-c:a", "libmp3lame", "-q:a", "4"],
