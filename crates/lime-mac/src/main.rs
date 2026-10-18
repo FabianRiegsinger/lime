@@ -2,6 +2,7 @@
 //! and runs the chosen operation through the bundled `lime` CLI.
 
 mod actions;
+mod icons;
 mod jobs;
 mod keyboard;
 mod settings;

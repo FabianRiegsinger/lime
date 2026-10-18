@@ -360,9 +360,12 @@ define_class!(
                         NSGraphicsContext::restoreGraphicsState_class();
                     }
                 }
+                let at = polar(c, (INNER + pulp_out) / 2.0, (start + end) / 2.0);
+                let gap = if n > 9 { 8.0 } else { 10.0 };
                 NSGraphicsContext::saveGraphicsState_class();
                 emboss.set();
-                draw_centered(&choice.label(), polar(c, (INNER + pulp_out) / 2.0, (start + end) / 2.0), &label_attrs);
+                crate::icons::draw(choice, NSPoint::new(at.x, at.y + gap), if n > 9 { 13.0 } else { 16.0 }, &p.text);
+                draw_centered(&choice.label(), NSPoint::new(at.x, at.y - gap), &label_attrs);
                 NSGraphicsContext::restoreGraphicsState_class();
             }
 
