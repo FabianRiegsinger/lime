@@ -25,7 +25,9 @@ check() { # check DESCRIPTION -- lime args...
   if out=$("$LIME" "$@" 2>&1) && [ -n "$out" ]; then echo "ok   $desc"; else echo "FAIL $desc: $out"; fail=1; fi
 }
 
-for t in jpg webp heic tiff avif bmp gif pdf; do check "png->$t" -- run to:$t pic.png; done
+# AVIF writing needs a hardware encoder that virtual Macs (CI) lack.
+if sips -s format avif pic.png --out probe.avif >/dev/null 2>&1; then avif=avif; else echo "skip png->avif: this Mac cannot encode AVIF"; avif=; fi
+for t in jpg webp heic tiff $avif bmp gif pdf; do check "png->$t" -- run to:$t pic.png; done
 check "heic->webp" -- run to:webp pic.heic
 check "image compress" -- run compress pic.jpg
 check "image resize" -- run resize --arg 25 pic.png

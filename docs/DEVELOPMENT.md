@@ -5,7 +5,7 @@
 Requirements: macOS 13+ on Apple silicon, Rust, the Xcode Command Line Tools, and these Homebrew packages, which ffmpeg links statically:
 
 ```sh
-brew install lame mpg123 opus libvpx webp libvorbis pkgconf
+brew install lame mpg123 opus libvpx webp libvorbis pkgconf nasm   # nasm: Intel Macs only
 scripts/bundle.sh          # builds ffmpeg once, then build/Lime.app (~27 MB)
 open build/Lime.app
 ```

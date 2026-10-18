@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds a minimal, LGPL-only, statically linked ffmpeg into build/ffmpeg/bin/ffmpeg.
-# Codec libs come from Homebrew: brew install lame mpg123 opus libvpx webp libvorbis pkgconf
+# Codec libs come from Homebrew: brew install lame mpg123 opus libvpx webp libvorbis pkgconf nasm (nasm for Intel)
 set -eu
 VERSION=7.1.1
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

@@ -31,7 +31,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Codec libraries
-        run: brew install lame mpg123 opus libvpx webp libvorbis pkgconf
+        run: brew install lame mpg123 opus libvpx webp libvorbis pkgconf nasm
       - uses: actions/cache@v4
         with:
           path: |
