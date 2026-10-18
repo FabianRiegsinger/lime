@@ -1,10 +1,13 @@
 #!/bin/sh
-# Builds build/Lime.app: menu-bar app + lime CLI + bundled LGPL ffmpeg, ad-hoc signed.
+# Builds build/Lime.app: menu-bar app + lime CLI + bundled LGPL ffmpeg + license notices.
+# Signs ad hoc by default. For distribution set SIGN_IDENTITY="Developer ID Application: …"
+# (hardened runtime), and NOTARY_PROFILE=<notarytool keychain profile> to notarize and staple.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 [ -x build/ffmpeg/bin/ffmpeg ] || scripts/build-ffmpeg.sh
-cargo build --release -p lime -p lime-mac
+# Keep the build machine's home folder out of the paths Rust embeds in panic messages.
+RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$HOME=~" cargo build --release -p lime -p lime-mac
 
 APP=build/Lime.app
 rm -rf "$APP"
@@ -12,6 +15,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp target/release/lime-mac target/release/lime "$APP/Contents/MacOS/"
 cp build/ffmpeg/bin/ffmpeg "$APP/Contents/Resources/ffmpeg"
 strip -x "$APP/Contents/Resources/ffmpeg"
+python3 -I scripts/notices.py
+cp build/Acknowledgements.txt "$APP/Contents/Resources/"
 ICONSET=build/Lime.iconset
 rm -rf "$ICONSET" && mkdir -p "$ICONSET"
 for s in 16 32 128 256 512; do
@@ -41,6 +46,19 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$APP/Contents/Resources/ffmpeg" "$APP/Contents/MacOS/lime"
-codesign --force --sign - "$APP"
+sign() {
+  if [ -n "${SIGN_IDENTITY:-}" ]; then
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$@"
+  else
+    codesign --force --sign - "$@"
+  fi
+}
+sign "$APP/Contents/Resources/ffmpeg" "$APP/Contents/MacOS/lime"
+sign --entitlements scripts/Lime.entitlements "$APP"
+if [ -n "${NOTARY_PROFILE:-}" ]; then
+  ditto -c -k --keepParent "$APP" build/Lime.zip
+  xcrun notarytool submit build/Lime.zip --keychain-profile "$NOTARY_PROFILE" --wait
+  xcrun stapler staple "$APP"
+  ditto -c -k --keepParent "$APP" build/Lime.zip # again, now with the ticket stapled
+fi
 du -sh "$APP"

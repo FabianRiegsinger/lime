@@ -20,19 +20,28 @@ cd "$WORK"
 [ -d "ffmpeg-$VERSION" ] || tar -xf "ffmpeg-$VERSION.tar.xz"
 cd "ffmpeg-$VERSION"
 
-./configure --prefix="$OUT" \
+# Relative paths only: ffmpeg embeds its configure line (shown by -buildconf), so absolute ones would leak the build machine's home folder.
+./configure \
   --disable-shared --enable-static \
   --disable-doc --disable-ffplay --disable-ffprobe --disable-network \
   --disable-autodetect --enable-videotoolbox --enable-audiotoolbox --enable-zlib \
   --enable-libmp3lame --enable-libopus --enable-libvpx --enable-libwebp --enable-libvorbis \
+  `# Patent-pooled audio codecs go through Apple's licensed AudioToolbox (aac_at, ac3_at, eac3_at) instead.` \
+  --disable-decoder=aac,aac_fixed,aac_latm,ac3,ac3_fixed,eac3 \
+  --disable-encoder=aac,ac3,ac3_fixed,eac3,mpeg4 \
   --pkg-config-flags=--static \
-  --extra-cflags="-I$BREW/include" --extra-ldflags="-L$DEPS" --extra-libs="-lmpg123"
-make -j"$(sysctl -n hw.ncpu)"
-make install
+  --extra-cflags="-I$BREW/include" --extra-ldflags="-L../../ffmpeg-deps" --extra-libs="-lmpg123"
+make -j"$(sysctl -n hw.ncpu)" ffmpeg
+mkdir -p "$OUT/bin"
+cp ffmpeg "$OUT/bin/ffmpeg"
 
 # Fail if anything besides system libraries got linked dynamically.
 if otool -L "$OUT/bin/ffmpeg" | tail -n +2 | grep -v -e '^\s*/usr/lib/' -e '^\s*/System/'; then
   echo "error: ffmpeg links non-system dylibs" >&2; exit 1
+fi
+# Selling Lime relies on ffmpeg staying LGPL: no GPL or nonfree parts.
+if "$OUT/bin/ffmpeg" -hide_banner -buildconf | grep -e '--enable-gpl' -e '--enable-nonfree' -e '--enable-version3'; then
+  echo "error: ffmpeg build is not LGPL-2.1-only" >&2; exit 1
 fi
 "$OUT/bin/ffmpeg" -hide_banner -L | head -3
 ls -lh "$OUT/bin/ffmpeg"

@@ -1,6 +1,6 @@
 # Lime
 
-An offline file converter for macOS, modelled on [Tangerine](https://tangerineformac.com/).
+An offline file converter for macOS.
 Drag a file in Finder, hold a key, and drop it on a wheel that appears under the pointer.
 Results are saved as new files next to the original; originals are never changed. Nothing is uploaded.
 
@@ -72,20 +72,28 @@ scripts/smoke-test.sh                                  # CLI end to end on gener
 scripts/smoke-test.sh build/Lime.app/Contents/MacOS/lime  # same, against the bundle
 ```
 
-## Not (yet) in Lime
+## Limits
 
-These Tangerine features are missing:
-
-- The interactive photo, background, video and audio editors. Lime has parameter-based tools instead.
-- PDF → DOCX layout reconstruction (Lime exports the text only), and PDF → PPTX/XLSX.
-- PowerPoint rendering, and Pages files.
-- The touch flow.
-- Enter alone on a Finder selection; Lime uses Option-Return so renaming still works.
-
-Markdown export is plain text.
+- Tools take parameters (quality, time range, …); there are no interactive editors.
+- PDF → DOCX and EPUB export the text only, without layout. No PDF → PPTX/XLSX, PowerPoint rendering or Pages files.
+- Markdown export is plain text.
 
 ## License
 
 Lime is licensed under Apache-2.0.
 
-The bundled `ffmpeg` is built LGPL-only (no GPL components; see `scripts/build-ffmpeg.sh` for the exact configuration). It ships as a separate executable inside the app. If you distribute Lime.app, include the FFmpeg LGPL notice and offer the FFmpeg source.
+The bundled `ffmpeg` is built LGPL-2.1-only: no GPL, nonfree or LGPLv3 parts, which `scripts/build-ffmpeg.sh` checks. It ships as a separate, replaceable executable inside the app. `scripts/bundle.sh` writes all third-party license notices, with the LGPL source offer, to `Lime.app/Contents/Resources/Acknowledgements.txt`, shown under **Acknowledgements…** in the menu.
+
+## Releasing
+
+1. Build signed and notarized, with a Developer ID certificate and a `notarytool` keychain profile:
+   ```sh
+   SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" NOTARY_PROFILE=lime scripts/bundle.sh
+   ```
+   This gives `build/Lime.zip`. Without `SIGN_IDENTITY` the app is signed ad hoc, and Gatekeeper blocks it on other Macs.
+2. Run `scripts/package-sources.sh` and attach `build/lime-<version>-third-party-sources.tar.gz` to the same GitHub release as the app. The acknowledgements promise it there; LGPL requires it.
+3. Bump `version` in `Cargo.toml` for every release, so the notice names the right source archive.
+
+Codec patents: AAC and AC-3 are decoded and AAC/H.264 encoded by Apple's licensed AudioToolbox and VideoToolbox. AVI export uses Motion JPEG and MP3, which are patent-free. ffmpeg's own H.264, HEVC and other video decoders are still used to read video; that is the remaining patent exposure, shared with most ffmpeg-based apps.
+
+The Mac App Store is not a target: Lime watches the system drag pasteboard, runs a helper executable and scripts Finder, which the App Store sandbox does not allow.

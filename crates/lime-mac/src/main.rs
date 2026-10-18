@@ -13,7 +13,7 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, sel, AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSEvent, NSImage, NSMenu, NSMenuItem, NSPasteboard,
-    NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSPopUpButton, NSSlider, NSStatusBar, NSStatusItem, NSVariableStatusItemLength,
+    NSPasteboardNameDrag, NSPasteboardTypeFileURL, NSPopUpButton, NSSlider, NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSWorkspace,
 };
 use objc2_foundation::{ns_string, NSData, NSNotification, NSObject, NSObjectProtocol, NSSize, NSString, NSTimer, NSURL};
 use std::cell::RefCell;
@@ -211,6 +211,15 @@ define_class!(
             }
         }
 
+        /// Third-party license notices, bundled by scripts/bundle.sh.
+        #[unsafe(method(openAcknowledgements:))]
+        fn open_acknowledgements(&self, _sender: Option<&AnyObject>) {
+            let file = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("../Resources/Acknowledgements.txt")));
+            if let Some(url) = file.filter(|f| f.exists()).and_then(|f| NSURL::from_file_path(f.canonicalize().ok()?)) {
+                NSWorkspace::sharedWorkspace().openURL(&url);
+            }
+        }
+
         #[unsafe(method(openSettings:))]
         fn open_settings(&self, _sender: Option<&AnyObject>) {
             settings::open(self.mtm(), self);
@@ -250,6 +259,8 @@ fn status_item(mtm: MainThreadMarker, delegate: &Delegate) -> Retained<NSStatusI
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     let settings_item = add(ns_string!("Settings…"), Some(sel!(openSettings:)), ns_string!(","));
     unsafe { settings_item.setTarget(Some(delegate)) };
+    let notices = add(ns_string!("Acknowledgements…"), Some(sel!(openAcknowledgements:)), ns_string!(""));
+    unsafe { notices.setTarget(Some(delegate)) };
     add(ns_string!("Quit Lime"), Some(sel!(terminate:)), ns_string!("q"));
     item.setMenu(Some(&menu));
     item

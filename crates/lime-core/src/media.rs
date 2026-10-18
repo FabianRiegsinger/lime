@@ -149,7 +149,8 @@ fn encode_args(target: &str) -> Result<Vec<&'static str>> {
     let video: &[&str] = match target {
         "mp4" | "mov" | "m4v" | "mkv" => &["-c:v", "h264_videotoolbox", "-q:v", "65", "-pix_fmt", "yuv420p", "-c:a", "aac_at", "-b:a", "192k"],
         "webm" => &["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-row-mt", "1", "-deadline", "good", "-cpu-used", "4", "-c:a", "libopus"],
-        "avi" => &["-c:v", "mpeg4", "-q:v", "4", "-c:a", "libmp3lame", "-q:a", "4"],
+        // Motion JPEG and MP3 are patent-free; ffmpeg's MPEG-4 Part 2 encoder is left out of the build.
+        "avi" => &["-c:v", "mjpeg", "-q:v", "3", "-pix_fmt", "yuvj420p", "-c:a", "libmp3lame", "-q:a", "4"],
         "wmv" => &["-c:v", "wmv2", "-b:v", "3M", "-c:a", "wmav2", "-b:a", "192k"],
         "gif" => &["-vf", "fps=12,scale='min(640,iw)':-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse", "-loop", "0", "-an"],
         _ => &[],
