@@ -11,7 +11,7 @@ BREW=$(brew --prefix)
 
 mkdir -p "$WORK" "$DEPS"
 # Only .a files in this dir, searched first, so the linker never picks Homebrew dylibs.
-for lib in mp3lame mpg123 opus vpx webp sharpyuv vorbis vorbisenc ogg; do
+for lib in mp3lame mpg123 opus vpx webp webpmux sharpyuv vorbis vorbisenc ogg; do
   ln -sf "$BREW/lib/lib$lib.a" "$DEPS/lib$lib.a"
 done
 
