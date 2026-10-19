@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lime-core", "crates/lime-cli", "crates/lime-mac"]
+members = ["crates/lime-core", "crates/lime-cli", "crates/lime-mac", "crates/lime-tray"]
 
 [workspace.package]
 version = "0.1.0"

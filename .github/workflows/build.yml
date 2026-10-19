@@ -1,5 +1,5 @@
 # Builds Lime for every platform. The menu-bar app is AppKit, so macOS gets Lime.app;
-# Windows and Linux get the `lime` command-line tool (ffmpeg must be on PATH there).
+# Windows and Linux get the `lime-tray` tray app and the `lime` command-line tool (ffmpeg must be on PATH there).
 # Publishing a GitHub release also attaches everything to that release.
 name: build
 
@@ -65,12 +65,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Tray libraries
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
       - name: Build
-        run: cargo build --release -p lime
+        run: cargo build --release -p lime -p lime-tray
       - name: Check
         run: target/release/lime ops convert README.md
       - name: Package
-        run: tar -czf lime-linux-x86_64.tar.gz -C target/release lime
+        run: tar -czf lime-linux-x86_64.tar.gz -C target/release lime lime-tray
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64
@@ -83,11 +85,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release -p lime
+        run: cargo build --release -p lime -p lime-tray
       - name: Check
         run: target/release/lime.exe ops convert README.md
       - name: Package
-        run: Compress-Archive -Path target/release/lime.exe -DestinationPath lime-windows-x86_64.zip
+        run: Compress-Archive -Path target/release/lime.exe, target/release/lime-tray.exe -DestinationPath lime-windows-x86_64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64

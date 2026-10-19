@@ -1,0 +1,13 @@
+[package]
+name = "lime-tray"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Windows and Linux only; macOS has the Lime.app menu-bar app.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+lime-core = { version = "0.1.0", path = "../lime-core" }
+rfd = "0.17.2"
+tao = "0.37.1"
+tray-icon = "0.26.1"
