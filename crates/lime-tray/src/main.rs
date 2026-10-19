@@ -1,5 +1,6 @@
 //! Lime tray app for Windows and Linux: pick files from the tray menu, then run a conversion or tool on them.
-//! Results are saved next to the originals, as in Lime.app.
+//! On Windows, dragging files with Shift or Ctrl held also opens the wheel, as in Lime.app.
+//! Results are saved next to the originals.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -13,11 +14,15 @@ fn main() {
     tray::run();
 }
 
+#[cfg(windows)]
+mod wheel;
+
 #[cfg(not(target_os = "macos"))]
 mod tray {
     use lime_core::{Op, Wheel};
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::time::Instant;
     use tao::event::{Event, StartCause};
     use tao::event_loop::{ControlFlow, EventLoopBuilder};
     use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
@@ -61,19 +66,25 @@ mod tray {
         Icon::from_rgba(img.into_raw(), w, h).expect("valid icon")
     }
 
+    /// Runs `op` on `files` and returns the files it created.
+    pub fn run_op(op: &Op, files: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+        // shortcut: tools that need a value run with its default; add an input dialog if users need other values.
+        lime_core::run(&op.id, files, op.param.as_ref().map(|p| p.default)).map_err(|e| format!("{e:#}"))
+    }
+
     fn job(op: Op, files: Vec<PathBuf>) {
         std::thread::spawn(move || {
-            // shortcut: tools that need a value run with its default; add an input dialog if users need other values.
-            let arg = op.param.as_ref().map(|p| p.default);
-            let (level, text) = match lime_core::run(&op.id, &files, arg) {
+            let (level, text) = match run_op(&op, &files) {
                 Ok(out) => (rfd::MessageLevel::Info, out.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n")),
-                Err(e) => (rfd::MessageLevel::Error, format!("{e:#}")),
+                Err(e) => (rfd::MessageLevel::Error, e),
             };
             rfd::MessageDialog::new().set_title(format!("Lime: {}", op.label)).set_description(text).set_level(level).show();
         });
     }
 
     pub fn run() {
+        #[cfg(windows)]
+        crate::wheel::init_dpi();
         let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
         let menu_proxy = proxy.clone();
@@ -84,13 +95,25 @@ mod tray {
         let mut tray: Option<TrayIcon> = None;
         let mut files: Vec<PathBuf> = vec![];
         let mut ops: HashMap<MenuId, Op> = HashMap::new();
+        let mut next_tick = Instant::now();
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Wait;
+            #[cfg(windows)]
+            {
+                if Instant::now() >= next_tick {
+                    next_tick = Instant::now() + crate::wheel::tick();
+                }
+                *control_flow = ControlFlow::WaitUntil(next_tick);
+            }
             match event {
                 // The tray has to be created once the event loop runs (GTK on Linux).
                 Event::NewEvents(StartCause::Init) => {
                     let (m, _) = menu(&files);
+                    #[cfg(windows)]
+                    if let Err(e) = crate::wheel::init() {
+                        eprintln!("lime-tray: no drag wheel: {e}");
+                    }
                     tray = Some(TrayIconBuilder::new().with_menu(Box::new(m)).with_icon(icon()).with_tooltip("Lime").build().expect("tray icon"));
                 }
                 Event::UserEvent(UserEvent::Menu(e)) => match e.id.as_ref() {

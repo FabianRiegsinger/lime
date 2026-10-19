@@ -86,6 +86,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --release -p lime -p lime-tray
+      - name: Test
+        run: cargo test -p lime-tray
       - name: Check
         run: target/release/lime.exe ops convert README.md
       - name: Package

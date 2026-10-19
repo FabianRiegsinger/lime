@@ -16,7 +16,7 @@ open build/Lime.app
 crates/lime-core   engine: format registry, conversions and tools (cross-platform core; PDF/AppKit parts macOS-only)
 crates/lime-cli    `lime` CLI: `lime ops convert|tools FILE…`, `lime run OP [--arg V] FILE…`
 crates/lime-mac    menu-bar app: drag detection, wheels, actions, progress, settings
-crates/lime-tray   Windows/Linux tray app: choose files, run a conversion or tool (Linux: libgtk-3-dev libxdo-dev libayatana-appindicator3-dev)
+crates/lime-tray   Windows/Linux tray app: choose files, run a conversion or tool; on Windows also the drag wheel (Linux: libgtk-3-dev libxdo-dev libayatana-appindicator3-dev)
 scripts/           build-ffmpeg.sh, bundle.sh, smoke-test.sh
 ```
 
