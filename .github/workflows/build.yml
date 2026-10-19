@@ -1,12 +1,13 @@
 # Builds Lime for every platform. The menu-bar app is AppKit, so macOS gets Lime.app;
 # Windows and Linux get the `lime` command-line tool (ffmpeg must be on PATH there).
-# A pushed `v*` tag also publishes everything to that GitHub release.
+# Publishing a GitHub release also attaches everything to that release.
 name: build
 
 on:
   push:
     branches: ["**"]
-    tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -93,7 +94,7 @@ jobs:
           path: lime-windows-x86_64.zip
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'release'
     needs: [macos, linux, windows]
     runs-on: ubuntu-latest
     permissions:
@@ -102,10 +103,9 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            Lime-macos-*.zip
-            build/lime-*-third-party-sources.tar.gz
-            lime-linux-x86_64.tar.gz
-            lime-windows-x86_64.zip
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release upload "${{ github.event.release.tag_name }}" --clobber --repo "${{ github.repository }}"
+          Lime-macos-*.zip build/lime-*-third-party-sources.tar.gz lime-linux-x86_64.tar.gz lime-windows-x86_64.zip
