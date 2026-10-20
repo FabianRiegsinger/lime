@@ -1,4 +1,4 @@
-//! Archives through the system `tar` (libarchive/bsdtar on macOS and Windows: zip, tar, tgz, rar, 7z).
+//! Archives through libarchive's bsdtar (the system `tar` on macOS and Windows, `bsdtar` on Linux): zip, tar, tgz, rar, 7z.
 
 use crate::formats::ext;
 use crate::util::{out_path, produce, run};
@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn tar() -> Command {
-    let mut c = Command::new("tar");
+    // GNU tar (the Linux default) cannot read or write zip, rar or 7z.
+    let mut c = Command::new(if cfg!(target_os = "linux") { "bsdtar" } else { "tar" });
     // Keep macOS AppleDouble (._*) files out of archives.
     c.env("COPYFILE_DISABLE", "1");
     c
@@ -29,12 +30,12 @@ fn pack(items: &[PathBuf], out: &Path) -> Result<()> {
 
 pub fn extract(input: &Path) -> Result<PathBuf> {
     produce(out_path(input, "", ""), |dir| {
-        std::fs::create_dir(dir)?;
         if ext(input) == "gz" {
             // A bare .gz holds one compressed file, not a tar.
             let name = input.file_stem().context("bad file name")?;
-            let file = std::fs::File::create(dir.join(name))?;
-            return run(Command::new("gunzip").arg("-c").arg(input).stdout(file)).map(drop);
+            let mut gz = flate2::read::MultiGzDecoder::new(std::fs::File::open(input)?);
+            std::io::copy(&mut gz, &mut std::fs::File::create(dir.join(name))?).context("not a valid .gz file")?;
+            return Ok(());
         }
         run(tar().arg("-xf").arg(input).arg("-C").arg(dir)).map(drop)
     })
@@ -59,15 +60,15 @@ pub fn convert(input: &Path, target: &str) -> Result<PathBuf> {
 
 /// One zip of all inputs: `<name>.zip` for one item, `Archive.zip` for several.
 pub fn zip(inputs: &[PathBuf]) -> Result<PathBuf> {
+    let first_dir = inputs[0].parent();
+    if inputs.iter().any(|p| p.parent() != first_dir) {
+        anyhow::bail!("zip needs all items in the same folder");
+    }
     let out = if inputs.len() == 1 {
         out_path(&inputs[0], "", "zip")
     } else {
         out_path(&inputs[0].with_file_name("Archive"), "", "zip")
     };
-    let first_dir = inputs[0].parent();
-    if inputs.iter().any(|p| p.parent() != first_dir) {
-        anyhow::bail!("zip needs all items in the same folder");
-    }
     produce(out, |out| pack(inputs, out))
 }
 
@@ -87,5 +88,17 @@ mod tests {
         assert_eq!(tgz, dir.path().join("stuff.tgz"));
         let out = extract(&tgz).unwrap();
         assert_eq!(std::fs::read_to_string(out.join("stuff/a.txt")).unwrap(), "hello");
+    }
+
+    #[test]
+    fn extracts_bare_gz() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let gz = dir.path().join("note.txt.gz");
+        let mut enc = flate2::write::GzEncoder::new(std::fs::File::create(&gz).unwrap(), flate2::Compression::default());
+        enc.write_all(b"hello").unwrap();
+        enc.finish().unwrap();
+        let out = extract(&gz).unwrap();
+        assert_eq!(std::fs::read_to_string(out.join("note.txt")).unwrap(), "hello");
     }
 }

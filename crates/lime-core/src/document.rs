@@ -100,11 +100,7 @@ pub fn write_epub(title: &str, text: &str, out: &Path) -> Result<()> {
     };
     std::fs::write(d.join("OEBPS/nav.xhtml"), page(&format!("<nav epub:type=\"toc\"><ol><li><a href=\"text.xhtml\">{title}</a></li></ol></nav>")))?;
     std::fs::write(d.join("OEBPS/text.xhtml"), page(&format!("<h1>{title}</h1>\n{body}")))?;
-    let out = std::path::absolute(out)?;
-    // mimetype must be the first entry, stored uncompressed.
-    run(Command::new("zip").current_dir(d).args(["-X0q"]).arg(&out).arg("mimetype"))?;
-    run(Command::new("zip").current_dir(d).args(["-Xr9q"]).arg(&out).args(["META-INF", "OEBPS"]))?;
-    Ok(())
+    crate::util::zip_files(d, &["mimetype", "META-INF/container.xml", "OEBPS/content.opf", "OEBPS/nav.xhtml", "OEBPS/text.xhtml"], out)
 }
 
 fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
@@ -138,7 +134,7 @@ fn epub_chapters(input: &Path, tmp: &Path) -> Result<Vec<PathBuf>> {
     Ok(chapters)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 

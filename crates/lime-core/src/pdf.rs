@@ -95,7 +95,6 @@ pub fn convert(input: &Path, target: &str) -> Result<PathBuf> {
                 return produce(out_path(input, "", target), |out| render(0, out));
             }
             produce(out_path(input, &format!(" {}", target.to_uppercase()), ""), |dir| {
-                std::fs::create_dir(dir)?;
                 (0..n).try_for_each(|i| render(i, &dir.join(format!("{}-{:03}.{target}", stem(input), i + 1))))
             })
         }
@@ -134,7 +133,6 @@ pub fn tool(op: &str, input: &Path, arg: Option<&str>) -> Result<Vec<PathBuf>> {
             Ok(())
         })?,
         "split" => produce(out_path(input, " pages", ""), |dir| {
-            std::fs::create_dir(dir)?;
             (0..n).try_for_each(|i| save(&*subset(input, &[i])?, &dir.join(format!("{}-{:03}.pdf", stem(input), i + 1))))
         })?,
         "extract" => {

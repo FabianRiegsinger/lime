@@ -73,14 +73,17 @@ pub fn stem(input: &Path) -> String {
 }
 
 /// A free path next to `input`: `<stem><suffix>.<ext>`, then `<stem><suffix> 2.<ext>`, …
-/// An empty `ext` yields a folder-style name.
+/// An empty `ext` yields a folder-style name. The path is reserved (created empty) so
+/// concurrent jobs never pick the same one; `produce` removes it again on failure.
 pub fn out_path(input: &Path, suffix: &str, ext: &str) -> PathBuf {
     let dir = input.parent().unwrap_or(Path::new("."));
     let base = format!("{}{suffix}", stem(input));
     let dot = if ext.is_empty() { String::new() } else { format!(".{ext}") };
+    let reserve = |p: &Path| if ext.is_empty() { std::fs::create_dir(p) } else { std::fs::File::create_new(p).map(drop) };
     let mut candidate = dir.join(format!("{base}{dot}"));
     let mut n = 2;
-    while candidate.exists() {
+    // Any error but "taken" (e.g. a read-only folder) leaves the path to fail where it is written.
+    while matches!(reserve(&candidate), Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists) {
         candidate = dir.join(format!("{base} {n}{dot}"));
         n += 1;
     }
@@ -130,11 +133,30 @@ pub fn ffmpeg() -> Command {
     c
 }
 
+/// Zips `names` (paths relative to `dir`, in order) into `out`. The first entry is stored
+/// uncompressed, as EPUB and OpenDocument require for `mimetype`.
+pub fn zip_files(dir: &Path, names: &[&str], out: &Path) -> Result<()> {
+    use std::io::Write;
+    use zip::{write::SimpleFileOptions, CompressionMethod};
+    let mut z = zip::ZipWriter::new(std::fs::File::create(out)?);
+    for (i, name) in names.iter().enumerate() {
+        let method = if i == 0 { CompressionMethod::Stored } else { CompressionMethod::Deflated };
+        z.start_file(*name, SimpleFileOptions::default().compression_method(method))?;
+        z.write_all(&std::fs::read(dir.join(name))?)?;
+    }
+    z.finish()?;
+    Ok(())
+}
+
 /// Removes a half-written output when `f` fails, so failures never leave junk next to the input.
 pub fn produce(out: PathBuf, f: impl FnOnce(&Path) -> Result<()>) -> Result<PathBuf> {
     match f(&out) {
-        Ok(()) if out.exists() => Ok(out),
-        Ok(()) => bail!("no output was produced"),
+        // The reserved file is empty until something writes it.
+        Ok(()) if out.is_dir() || out.metadata().is_ok_and(|m| m.len() > 0) => Ok(out),
+        Ok(()) => {
+            let _ = std::fs::remove_file(&out);
+            bail!("no output was produced")
+        }
         Err(e) => {
             let _ = if out.is_dir() { std::fs::remove_dir_all(&out) } else { std::fs::remove_file(&out) };
             Err(e)
@@ -151,8 +173,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let input = dir.path().join("photo.png");
         assert_eq!(out_path(&input, "", "jpg"), dir.path().join("photo.jpg"));
-        std::fs::write(dir.path().join("photo.jpg"), "").unwrap();
+        // The first call reserved photo.jpg.
         assert_eq!(out_path(&input, "", "jpg"), dir.path().join("photo 2.jpg"));
+        assert_eq!(out_path(&input, "", ""), dir.path().join("photo"));
+        assert!(dir.path().join("photo").is_dir());
         assert_eq!(out_path(&dir.path().join("a.tar.gz"), "", "zip"), dir.path().join("a.zip"));
     }
 

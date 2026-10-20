@@ -66,9 +66,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Tray libraries
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxdo-dev libayatana-appindicator3-dev libarchive-tools
       - name: Build
         run: cargo build --release -p lime -p lime-tray
+      - name: Test
+        run: cargo test -p lime-core
       - name: Check
         run: target/release/lime ops convert README.md
       - name: Package
@@ -87,7 +89,7 @@ jobs:
       - name: Build
         run: cargo build --release -p lime -p lime-tray
       - name: Test
-        run: cargo test -p lime-tray
+        run: cargo test -p lime-core -p lime-tray
       - name: Check
         run: target/release/lime.exe ops convert README.md
       - name: Package

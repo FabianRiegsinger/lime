@@ -8,9 +8,12 @@ license.workspace = true
 anyhow = "1.0.104"
 calamine = "0.36.1"
 csv = "1.4.0"
+# Both already come with calamine; listed to write zips and read .gz without external tools.
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
 pulldown-cmark = "0.13.4"
 rust_xlsxwriter = "0.100.0"
 tempfile = "3.27.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.5"

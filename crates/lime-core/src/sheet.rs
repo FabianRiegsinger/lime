@@ -1,11 +1,10 @@
 //! Spreadsheets: read XLSX/XLS/ODS (calamine) and CSV/TSV, write XLSX, ODS, CSV, TSV and PDF.
 
 use crate::formats::ext;
-use crate::util::{out_path, produce, run, stem};
+use crate::util::{out_path, produce, stem};
 use anyhow::{bail, Result};
 use calamine::Reader;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 type Table = Vec<Vec<String>>;
 
@@ -93,11 +92,7 @@ fn write_ods(sheets: &[(String, Table)], out: &Path) -> Result<()> {
             r#"<?xml version="1.0" encoding="UTF-8"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2"><office:body><office:spreadsheet>{body}</office:spreadsheet></office:body></office:document-content>"#
         ),
     )?;
-    let out = std::path::absolute(out)?;
-    // mimetype must be the first entry, stored uncompressed.
-    run(Command::new("zip").current_dir(d).args(["-X0q"]).arg(&out).arg("mimetype"))?;
-    run(Command::new("zip").current_dir(d).args(["-Xr9q"]).arg(&out).args(["META-INF", "content.xml"]))?;
-    Ok(())
+    crate::util::zip_files(d, &["mimetype", "META-INF/manifest.xml", "content.xml"], out)
 }
 
 #[cfg(target_os = "macos")]

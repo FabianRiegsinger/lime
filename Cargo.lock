@@ -1149,6 +1149,7 @@ dependencies = [
  "anyhow",
  "calamine",
  "csv",
+ "flate2",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -1156,6 +1157,7 @@ dependencies = [
  "pulldown-cmark",
  "rust_xlsxwriter",
  "tempfile",
+ "zip 8.6.0",
 ]
 
 [[package]]

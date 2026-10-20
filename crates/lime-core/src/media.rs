@@ -1,4 +1,4 @@
-//! Images (sips, with ffmpeg for WebP) and audio/video (ffmpeg).
+//! Images (sips on macOS, with ffmpeg for WebP; ffmpeg only elsewhere) and audio/video (ffmpeg).
 
 use crate::formats::{ext, kind, Kind};
 use crate::util::{ffmpeg, out_path, produce, run, stem};
@@ -8,8 +8,14 @@ use std::process::Command;
 
 // ---------- images ----------
 
+/// `sips` ships with macOS only; elsewhere every image goes through ffmpeg.
+const SIPS: bool = cfg!(target_os = "macos");
+
 /// sips output format name, when sips can write `ext`.
 fn sips_format(ext: &str) -> Option<&'static str> {
+    if !SIPS {
+        return None;
+    }
     Some(match ext {
         "jpg" => "jpeg",
         "png" => "png",
@@ -24,9 +30,23 @@ fn sips_format(ext: &str) -> Option<&'static str> {
     })
 }
 
-/// Inputs ffmpeg decodes directly; others go through a sips PNG first.
+/// Inputs ffmpeg decodes directly; on macOS others go through a sips PNG first.
 fn ffmpeg_reads(ext: &str) -> bool {
-    matches!(ext, "jpg" | "png" | "webp" | "bmp" | "tiff" | "tif" | "gif")
+    !SIPS || matches!(ext, "jpg" | "png" | "webp" | "bmp" | "tiff" | "tif" | "gif")
+}
+
+/// ffmpeg encoder args for an image written as `ext`.
+fn ffmpeg_args(ext: &str) -> &'static [&'static str] {
+    match ext {
+        "webp" => WEBP,
+        "jpg" => &["-q:v", "2"],
+        _ => &[],
+    }
+}
+
+/// Formats ffmpeg writes as images; edits of other formats become PNG.
+fn ffmpeg_writes(ext: &str) -> bool {
+    matches!(ext, "jpg" | "png" | "webp" | "bmp" | "tiff" | "gif")
 }
 
 fn sips(input: &Path, out: &Path, args: &[&str]) -> Result<()> {
@@ -51,7 +71,7 @@ const WEBP: &[&str] = &["-c:v", "libwebp", "-quality", "85"];
 pub fn convert_image(input: &Path, target: &str) -> Result<PathBuf> {
     produce(out_path(input, "", target), |out| match sips_format(target) {
         Some(fmt) => sips(input, out, &["-s", "format", fmt]),
-        None => ffmpeg_image(input, out, WEBP),
+        None => ffmpeg_image(input, out, ffmpeg_args(target)),
     })
 }
 
@@ -70,10 +90,11 @@ fn dims(input: &Path) -> Result<(u32, u32)> {
 /// Keeps the input format when possible; formats nobody can write (SVG, JXL) become PNG.
 fn edit_image(input: &Path, suffix: &str, sips_args: &[&str], filter: &str) -> Result<PathBuf> {
     let e = ext(input);
-    if e == "webp" {
+    if e == "webp" || !SIPS {
+        let out_ext = if ffmpeg_writes(&e) { e.as_str() } else { "png" };
         let mut args = vec!["-vf", filter];
-        args.extend_from_slice(WEBP);
-        return produce(out_path(input, suffix, "webp"), |out| ffmpeg_image(input, out, &args));
+        args.extend_from_slice(ffmpeg_args(out_ext));
+        return produce(out_path(input, suffix, out_ext), |out| ffmpeg_image(input, out, &args));
     }
     let (out_ext, mut args) = match sips_format(&e) {
         Some(_) => (e.as_str(), vec![]),
@@ -99,7 +120,7 @@ pub fn image_tool(op: &str, input: &Path, arg: Option<&str>) -> Result<Vec<PathB
             let q = number(arg, 1.0, 100.0)?;
             let qs = format!("{q:.0}");
             match e.as_str() {
-                "jpg" | "heic" | "avif" => produce(out_path(input, "-compressed", &e), |out| {
+                "jpg" | "heic" | "avif" if SIPS => produce(out_path(input, "-compressed", &e), |out| {
                     sips(input, out, &["-s", "format", sips_format(&e).unwrap(), "-s", "formatOptions", &qs])
                 })?,
                 "webp" => produce(out_path(input, "-compressed", "webp"), |out| {
@@ -110,23 +131,27 @@ pub fn image_tool(op: &str, input: &Path, arg: Option<&str>) -> Result<Vec<PathB
                     ffmpeg_image(input, out, &["-vf", "split[a][b];[a]palettegen[p];[b][p]paletteuse"])
                 })?,
                 // shortcut: other formats have no quality knob, so they become JPEG; upgrade per-format if users mind.
-                _ => produce(out_path(input, "-compressed", "jpg"), |out| {
+                _ if SIPS => produce(out_path(input, "-compressed", "jpg"), |out| {
                     sips(input, out, &["-s", "format", "jpeg", "-s", "formatOptions", &qs])
+                })?,
+                // ffmpeg's JPEG quality runs from 2 (best) to 31.
+                _ => produce(out_path(input, "-compressed", "jpg"), |out| {
+                    let qv = format!("{:.0}", 31.0 - (q - 1.0) * 29.0 / 99.0);
+                    ffmpeg_image(input, out, &["-q:v", &qv])
                 })?,
             }
         }
         "resize" => {
             let pct = number(arg, 1.0, 1000.0)?;
-            let (w, _) = dims(input)?;
-            let nw = ((w as f64 * pct / 100.0).round() as u32).max(1).to_string();
-            edit_image(input, "-resized", &["--resampleWidth", &nw], &format!("scale={nw}:-2"))?
+            // Only sips needs the size up front; ffmpeg computes it from the filter.
+            let nw = if SIPS { ((dims(input)?.0 as f64 * pct / 100.0).round() as u32).max(1).to_string() } else { String::new() };
+            edit_image(input, "-resized", &["--resampleWidth", &nw], &format!("scale='max(1,round(iw*{pct}/100))':-1"))?
         }
         "rotate" => edit_image(input, "-rotated", &["-r", "90"], "transpose=1")?,
         "flip" => edit_image(input, "-flipped", &["-f", "horizontal"], "hflip")?,
         "square" => {
-            let (w, h) = dims(input)?;
-            let s = w.min(h).to_string();
-            edit_image(input, "-square", &["-c", &s, &s], &format!("crop={s}:{s}"))?
+            let s = if SIPS { let (w, h) = dims(input)?; w.min(h).to_string() } else { String::new() };
+            edit_image(input, "-square", &["-c", &s, &s], "crop='min(iw,ih)':'min(iw,ih)'")?
         }
         "strip" => produce(out_path(input, "-clean", &e), |out| {
             let mut args = vec!["-map_metadata", "-1"];
@@ -264,7 +289,6 @@ pub fn av_tool(op: &str, input: &Path, arg: Option<&str>) -> Result<Vec<PathBuf>
             let parts = number(arg, 2.0, 100.0)?;
             let seg = format!("{:.3}", probe(input)?.seconds / parts.round());
             produce(out_path(input, " parts", ""), |dir| {
-                std::fs::create_dir(dir)?;
                 let pattern = dir.join(format!("{}-%02d.{e}", stem(input)));
                 ff(input, &pattern, &["-map", "0", "-c", "copy", "-f", "segment", "-segment_time", &seg, "-reset_timestamps", "1"])
             })?

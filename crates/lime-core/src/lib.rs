@@ -120,7 +120,8 @@ fn tools_for(kind: Kind, first: &Path, multi: bool) -> Vec<Op> {
     if multi {
         match kind {
             Kind::Audio | Kind::Video | Kind::Pdf => v.push(tool("merge", "Merge")),
-            Kind::Image => v.push(tool("merge", "Combine PDF")),
+            // Images → PDF goes through PDFKit.
+            Kind::Image if cfg!(target_os = "macos") => v.push(tool("merge", "Combine PDF")),
             _ => {}
         }
     }

@@ -49,12 +49,16 @@ pub fn kind(path: &Path) -> Kind {
 /// Formats `path` (of kind `k`) can be converted to, excluding its own format.
 pub fn targets(path: &Path, k: Kind) -> Vec<&'static str> {
     let all: &[&str] = match k {
-        Kind::Image => &["jpg", "png", "webp", "heic", "tiff", "avif", "bmp", "gif", "pdf"],
+        Kind::Image if cfg!(target_os = "macos") => &["jpg", "png", "webp", "heic", "tiff", "avif", "bmp", "gif", "pdf"],
+        // Without sips only what ffmpeg writes everywhere.
+        Kind::Image => &["jpg", "png", "webp", "tiff", "bmp", "gif"],
         Kind::Audio => &["mp3", "m4a", "wav", "flac", "ogg", "opus", "aiff", "wma"],
         Kind::Video => &["mp4", "mov", "mkv", "webm", "avi", "wmv", "gif", "mp3"],
         Kind::Pdf if cfg!(target_os = "macos") => &["txt", "md", "docx", "epub", "jpg", "png"],
         Kind::Pdf => &[],
-        Kind::Document => &["docx", "odt", "rtf", "txt", "md", "html", "epub", "pdf"],
+        // Documents are read through macOS textutil.
+        Kind::Document if cfg!(target_os = "macos") => &["docx", "odt", "rtf", "txt", "md", "html", "epub", "pdf"],
+        Kind::Document => &[],
         Kind::Spreadsheet => &["xlsx", "ods", "csv", "tsv", "pdf"],
         Kind::Subtitle => &["srt", "vtt", "txt"],
         Kind::Archive | Kind::Other => &["zip", "tar", "tgz"],
@@ -62,8 +66,8 @@ pub fn targets(path: &Path, k: Kind) -> Vec<&'static str> {
     let own = ext(path);
     let own = if own == "tif" { "tiff".to_string() } else { own };
     let mut v: Vec<&'static str> = all.iter().copied().filter(|t| *t != own).collect();
-    // Document → PDF goes through AppKit.
-    if !cfg!(target_os = "macos") && matches!(k, Kind::Document | Kind::Spreadsheet) {
+    // Spreadsheet → PDF goes through AppKit.
+    if !cfg!(target_os = "macos") && k == Kind::Spreadsheet {
         v.retain(|t| *t != "pdf");
     }
     // Plain gzip/rar/7z are extract-only sources but can be repacked; a lone .gz holds one file.
