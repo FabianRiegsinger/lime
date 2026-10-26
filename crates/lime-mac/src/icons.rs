@@ -54,6 +54,12 @@ pub fn symbol(choice: &Choice) -> &'static str {
         "merge" => "arrow.triangle.merge",
         "shift" => "clock.arrow.circlepath",
         "zip" => "doc.zipper",
+        "pack:zip-aes" | "pack:dmg-aes" => "lock",
+        "pack:zip-split" => "square.split.2x1",
+        "pack:dmg" => "externaldrive",
+        "pack:iso" => "opticaldiscdrive",
+        "pack:aar" => "archivebox",
+        id if id.starts_with("pack:") => "doc.zipper",
         _ => "questionmark",
     }
 }
@@ -81,6 +87,7 @@ mod tests {
     #[test]
     fn every_choice_has_a_symbol() {
         let mut choices: Vec<Choice> = Action::ALL.iter().copied().map(Choice::Action).collect();
+        choices.extend(lime_core::compress_ops().into_iter().map(Choice::Op));
         for f in ["a.png", "a.mp4", "a.mp3", "a.pdf", "a.md", "a.csv", "a.srt", "a.zip"] {
             for files in [vec![f.into()], vec![f.into(), f.into()]] {
                 for wheel in [lime_core::Wheel::Convert, lime_core::Wheel::Tools] {

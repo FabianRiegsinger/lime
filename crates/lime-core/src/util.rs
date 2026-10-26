@@ -98,6 +98,41 @@ pub fn run(cmd: &mut Command) -> Result<String> {
         let out = cmd.output().with_context(|| format!("could not start {:?}", cmd.get_program()))?;
         (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
     };
+    check(cmd, ok, stdout, &err)
+}
+
+/// Like `run`, but types `secret` on stdin so it never shows in the process list. The child gets
+/// its own session, without a terminal, so tools that prompt for a password read stdin instead.
+pub fn run_secret(cmd: &mut Command, secret: &str) -> Result<String> {
+    use std::io::Write;
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        extern "C" {
+            fn setsid() -> i32;
+        }
+        // SAFETY: setsid is async-signal-safe, as pre_exec requires.
+        unsafe {
+            cmd.pre_exec(|| {
+                setsid();
+                Ok(())
+            })
+        };
+    }
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("could not start {:?}", cmd.get_program()))?;
+    // No newline: hdiutil would take it as part of the password; bsdtar stops at EOF too.
+    // A tool that quits early closes stdin; its exit status tells why.
+    let _ = child.stdin.take().expect("piped stdin").write_all(secret.as_bytes());
+    let out = child.wait_with_output()?;
+    check(cmd, out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), &String::from_utf8_lossy(&out.stderr))
+}
+
+fn check(cmd: &Command, ok: bool, stdout: String, err: &str) -> Result<String> {
     if !ok {
         let tail: Vec<&str> = err.lines().rev().take(4).collect();
         bail!(

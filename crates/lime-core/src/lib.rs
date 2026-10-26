@@ -28,6 +28,8 @@ pub enum Wheel {
 pub struct Param {
     pub prompt: &'static str,
     pub default: &'static str,
+    /// A password: typed hidden and never passed on a command line.
+    pub secret: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,7 +45,30 @@ fn tool(id: &str, label: &str) -> Op {
 }
 
 fn tool_with(id: &str, label: &str, prompt: &'static str, default: &'static str) -> Op {
-    Op { id: id.into(), label: label.into(), param: Some(Param { prompt, default }) }
+    Op { id: id.into(), label: label.into(), param: Some(Param { prompt, default, secret: false }) }
+}
+
+fn secret(id: &str, label: &str, prompt: &'static str) -> Op {
+    Op { id: id.into(), label: label.into(), param: Some(Param { prompt, default: "", secret: true }) }
+}
+
+/// Ways to pack files into one archive, Keka-style; the Mac app shows them in a ring around Zip.
+pub fn compress_ops() -> Vec<Op> {
+    let mut v: Vec<Op> =
+        ["7z", "tar", "tar.gz", "tar.bz2", "tar.xz", "tar.zst", "tar.lz"].iter().map(|f| tool(&format!("pack:{f}"), &f.to_uppercase())).collect();
+    v.push(tool_with("pack:zip", "ZIP Level", "Compression level (0 = store, 9 = best)", "9"));
+    v.push(tool_with("pack:zip-split", "Split ZIP", "Part size (MB)", "100"));
+    // The password goes to bsdtar on stdin, which needs a Unix session without a terminal.
+    if cfg!(unix) {
+        v.push(secret("pack:zip-aes", "Locked ZIP", "Password (AES-256)"));
+    }
+    if cfg!(target_os = "macos") {
+        v.push(tool("pack:dmg", "DMG"));
+        v.push(secret("pack:dmg-aes", "Locked DMG", "Password (AES-256)"));
+        v.push(tool("pack:iso", "ISO"));
+        v.push(tool("pack:aar", "AAR"));
+    }
+    v
 }
 
 /// Operations offered on `wheel` for `inputs`. Empty when nothing applies.
@@ -152,6 +177,10 @@ pub fn run(op_id: &str, inputs: &[PathBuf], arg: Option<&str>) -> Result<Vec<Pat
                 made
             })
             .collect();
+    }
+    if let Some(format) = op_id.strip_prefix("pack:") {
+        let op = compress_ops().into_iter().find(|o| o.id == op_id).ok_or_else(|| anyhow::anyhow!("unknown archive format '{format}'"))?;
+        return archive::compress(inputs, format, arg.or(op.param.as_ref().map(|p| p.default)));
     }
     let op = ops(Wheel::Tools, inputs)
         .into_iter()

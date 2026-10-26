@@ -28,6 +28,12 @@ const PITH: f64 = 5.0;
 /// Half the white membrane between segments, and the corner radius of each segment.
 const MEMBRANE: f64 = 2.5;
 const ROUND: f64 = 12.0;
+/// The compress ring around the wheel, opened by resting on Zip during a drag.
+const RING_DISC: f64 = 250.0;
+const RING_SIZE: f64 = 2.0 * (RING_DISC + 16.0);
+/// How long the pointer rests on the Compress button before the ring opens, and stays away from it before it closes.
+const OPEN_HOLD: Duration = Duration::from_millis(500);
+const CLOSE_HOLD: Duration = Duration::from_millis(1500);
 
 /// Neutral tints laid over the glass. `glass` (0..1) only fades the background disc from solid to see-through.
 /// Without Liquid Glass (`None`) the wheel is a solid grey disc with slightly greyer segments.
@@ -214,6 +220,53 @@ pub struct WheelData {
     opened: Option<Instant>,
     scale: f64,
     busy: Option<Busy>,
+    /// Compress formats in the outer ring; empty while it is closed. `hovered` and `busy`
+    /// indexes past `choices` point into it.
+    ring: Vec<Choice>,
+    /// What the ring shows once it opens.
+    ring_choices: Vec<Choice>,
+    /// When the ring opened, and how far it has grown (0..1).
+    ring_opened: Option<Instant>,
+    ring_scale: f64,
+    /// Since when the pointer rests on Zip, and since when it has been away from the ring.
+    on_zip: Option<Instant>,
+    away: Option<Instant>,
+}
+
+impl WheelData {
+    fn choice(&self, i: usize) -> Option<&Choice> {
+        self.choices.get(i).or_else(|| self.ring.get(i.checked_sub(self.choices.len())?))
+    }
+
+    /// Radius of the glass behind the wheel, and the ring when it is open.
+    fn radius(&self) -> f64 {
+        if self.ring.is_empty() {
+            DISC * self.scale
+        } else {
+            DISC + (RING_DISC - DISC) * self.ring_scale
+        }
+    }
+
+    /// Updates the Zip and away timers for the segment now under the pointer.
+    fn hold(&mut self, hit: Option<usize>, now: Instant) {
+        let on_zip = hit.and_then(|i| self.choices.get(i)).is_some_and(|c| matches!(c, Choice::Op(op) if op.id == "zip"));
+        let in_ring = hit.is_some_and(|i| i >= self.choices.len());
+        self.on_zip = if on_zip && self.ring.is_empty() && !self.ring_choices.is_empty() { self.on_zip.or(Some(now)) } else { None };
+        // Resting on Zip keeps the ring too, so it does not close and reopen under the pointer.
+        self.away = if in_ring || on_zip { None } else { self.away.or(Some(now)) };
+    }
+
+    /// `Some(true)` when the ring should open at `now`, `Some(false)` when it should close.
+    fn ring_due(&self, now: Instant) -> Option<bool> {
+        let held = |since: Option<Instant>, hold| since.is_some_and(|t| now.duration_since(t) >= hold);
+        if self.busy.is_some() {
+            None
+        } else if self.ring.is_empty() {
+            held(self.on_zip, OPEN_HOLD).then_some(true)
+        } else {
+            held(self.away, CLOSE_HOLD).then_some(false)
+        }
+    }
 }
 
 /// A chosen button filling from its inner to its outer edge while the job runs.
@@ -265,15 +318,20 @@ define_class!(
     }
 );
 
-/// Segment under `p` (view coordinates), counted clockwise from 12 o'clock.
-fn segment_at(p: NSPoint, n: usize) -> Option<usize> {
-    let (dx, dy) = (p.x - SIZE / 2.0, p.y - SIZE / 2.0);
+/// Which of `n` segments between radii `inner` and `outer` around `c` lies under `p`, counted clockwise from 12 o'clock.
+fn segment_at(p: NSPoint, c: NSPoint, inner: f64, outer: f64, n: usize) -> Option<usize> {
+    let (dx, dy) = (p.x - c.x, p.y - c.y);
     let dist = dx.hypot(dy);
-    if n == 0 || !(INNER..=DISC).contains(&dist) {
+    if n == 0 || !(inner..=outer).contains(&dist) {
         return None;
     }
     let clockwise_from_top = (90.0 - dy.atan2(dx).to_degrees()).rem_euclid(360.0);
     Some(((clockwise_from_top / (360.0 / n as f64)) as usize).min(n - 1))
+}
+
+fn centre(view: &NSView) -> NSPoint {
+    let b = view.bounds();
+    NSPoint::new(b.size.width / 2.0, b.size.height / 2.0)
 }
 
 fn attrs(size: f64, color: &NSColor, bold: bool) -> Retained<NSDictionary<NSString, AnyObject>> {
@@ -303,8 +361,8 @@ define_class!(
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
             let data = self.ivars().borrow();
-            let c = NSPoint::new(SIZE / 2.0, SIZE / 2.0);
-            let n = data.choices.len();
+            let c = centre(self);
+            let (n, m) = (data.choices.len(), data.ring.len());
             let dark = is_dark(self);
             let p = Palette::new(dark, data.glass);
             let (pulp_out, pulp_in) = (OUTER - RIND - PITH, INNER + 1.0);
@@ -314,6 +372,20 @@ define_class!(
                 t.scaleBy(data.scale.max(0.01));
                 t.translateXBy_yBy(-c.x, -c.y);
                 t.concat();
+            }
+            if m > 0 {
+                let r = data.radius();
+                if let Some(disc) = &p.disc {
+                    let band = circle(c, r);
+                    band.appendBezierPath(&circle(c, DISC));
+                    band.setWindingRule(objc2_app_kit::NSWindingRule::EvenOdd);
+                    disc.setFill();
+                    band.fill();
+                }
+                let edge = circle(c, r - 0.5);
+                edge.setLineWidth(1.0);
+                NSColor::colorWithWhite_alpha(1.0, if dark { 0.14 } else { 0.6 }).setStroke();
+                edge.stroke();
             }
             if let Some(disc) = &p.disc {
                 disc.setFill();
@@ -325,12 +397,20 @@ define_class!(
             NSColor::colorWithWhite_alpha(1.0, if dark { 0.14 } else { 0.6 }).setStroke();
             edge.stroke();
 
-            let step = 360.0 / n.max(1) as f64;
-            let shapes: Vec<_> = (0..n)
+            // Inner radius, outer radius, segment count and position within its band, for wheel and ring alike.
+            let band = |i: usize| if i < n { (pulp_in, pulp_out, n, i) } else { (DISC + 4.0, RING_DISC - RIND - PITH, m, i - n) };
+            let angles = |k: usize, j: usize| {
+                let step = 360.0 / k.max(1) as f64;
+                (90.0 - j as f64 * step, 90.0 - (j + 1) as f64 * step)
+            };
+            // The ring's buttons appear once it has grown.
+            let count = if data.ring_scale >= 1.0 { n + m } else { n };
+            let shapes: Vec<_> = (0..count)
                 .map(|i| {
-                    let (start, end) = (90.0 - i as f64 * step, 90.0 - (i + 1) as f64 * step);
-                    if n > 1 {
-                        segment(c, pulp_in, pulp_out, start, end)
+                    let (ri, ro, k, j) = band(i);
+                    let (start, end) = angles(k, j);
+                    if k > 1 {
+                        segment(c, ri, ro, start, end)
                     } else {
                         let ring = circle(c, pulp_out);
                         ring.appendBezierPath(&circle(c, pulp_in));
@@ -346,26 +426,27 @@ define_class!(
                     drop_shadow(shape, color(i), if data.hovered == Some(i) { 3.5 } else { 1.2 }, dark);
                 }
             }
-            let label_attrs = attrs(if n > 9 { 11.0 } else { 13.0 }, &p.text, true);
+            let label_attrs = |k: usize| attrs(if k > 9 { 11.0 } else { 13.0 }, &p.text, true);
             // Light mode engraves the labels with a white line below; dark mode lifts them with a black one.
             let emboss = shadow(0.0, -1.0, 0.0, &NSColor::colorWithWhite_alpha(if dark { 0.0 } else { 1.0 }, if dark { 0.5 } else { 0.45 }));
-            for (i, choice) in data.choices.iter().enumerate() {
-                let (start, end) = (90.0 - i as f64 * step, 90.0 - (i + 1) as f64 * step);
+            for (i, choice) in data.choices.iter().chain(&data.ring).enumerate().take(count) {
+                let (ri, ro, k, j) = band(i);
+                let (start, end) = angles(k, j);
                 if let Some(shape) = &shapes[i] {
                     face(shape, color(i), dark);
                     if let Some(busy) = data.busy.as_ref().filter(|b| b.index == i && b.shown > 0.0) {
                         NSGraphicsContext::saveGraphicsState_class();
                         shape.addClip();
-                        face(&circle(c, pulp_in + (pulp_out - pulp_in) * busy.shown), &p.pulp_hover, dark);
+                        face(&circle(c, ri + (ro - ri) * busy.shown), &p.pulp_hover, dark);
                         NSGraphicsContext::restoreGraphicsState_class();
                     }
                 }
-                let at = polar(c, (INNER + pulp_out) / 2.0, (start + end) / 2.0);
-                let gap = if n > 9 { 8.0 } else { 10.0 };
+                let at = polar(c, (if i < n { INNER } else { ri } + ro) / 2.0, (start + end) / 2.0);
+                let gap = if k > 9 { 8.0 } else { 10.0 };
                 NSGraphicsContext::saveGraphicsState_class();
                 emboss.set();
-                crate::icons::draw(choice, NSPoint::new(at.x, at.y + gap), if n > 9 { 13.0 } else { 16.0 }, &p.text);
-                draw_centered(&choice.label(), NSPoint::new(at.x, at.y - gap), &label_attrs);
+                crate::icons::draw(choice, NSPoint::new(at.x, at.y + gap), if k > 9 { 13.0 } else { 16.0 }, &p.text);
+                draw_centered(&choice.label(), NSPoint::new(at.x, at.y - gap), &label_attrs(k));
                 NSGraphicsContext::restoreGraphicsState_class();
             }
 
@@ -392,6 +473,7 @@ define_class!(
 
         #[unsafe(method(draggingExited:))]
         fn dragging_exited(&self, _info: Option<&ProtocolObject<dyn NSDraggingInfo>>) {
+            self.ivars().borrow_mut().hold(None, Instant::now());
             self.set_hovered(None);
         }
 
@@ -399,7 +481,7 @@ define_class!(
         fn perform_drag(&self, info: &ProtocolObject<dyn NSDraggingInfo>) -> Bool {
             let picked = {
                 let data = self.ivars().borrow();
-                data.hovered.and_then(|i| Some((i, data.choices.get(i)?.clone())))
+                data.hovered.and_then(|i| Some((i, data.choice(i)?.clone())))
             };
             let Some((index, choice)) = picked else {
                 hide();
@@ -470,15 +552,16 @@ impl WheelView {
     }
 
     fn track(&self, info: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {
-        let p = self.convertPoint_fromView(info.draggingLocation(), None);
-        let (n, busy) = {
+        let (p, c) = (self.convertPoint_fromView(info.draggingLocation(), None), centre(self));
+        let (n, m, busy) = {
             let data = self.ivars().borrow();
-            (data.choices.len(), data.busy.is_some())
+            (data.choices.len(), data.ring.len(), data.busy.is_some())
         };
         if busy {
             return NSDragOperation::None;
         }
-        let hit = segment_at(p, n);
+        let hit = segment_at(p, c, INNER, DISC, n).or_else(|| segment_at(p, c, DISC, RING_DISC, m).map(|i| n + i));
+        self.ivars().borrow_mut().hold(hit, Instant::now());
         self.set_hovered(hit);
         if hit.is_some() {
             NSDragOperation::Copy
@@ -512,11 +595,28 @@ thread_local! {
     static WHEEL: RefCell<Option<(Retained<NSPanel>, Retained<WheelView>, Option<Retained<NSGlassEffectView>>)>> = const { RefCell::new(None) };
 }
 
-fn choices(kind: WheelKind, files: &[PathBuf]) -> Vec<Choice> {
+/// The wheel's choices, and the ring's.
+fn choices(kind: WheelKind, files: &[PathBuf]) -> (Vec<Choice>, Vec<Choice>) {
+    let ops = |ops: Vec<lime_core::Op>| ops.into_iter().map(Choice::Op).collect();
     match kind {
-        WheelKind::Convert => lime_core::ops(lime_core::Wheel::Convert, files).into_iter().map(Choice::Op).collect(),
-        WheelKind::Tools => lime_core::ops(lime_core::Wheel::Tools, files).into_iter().map(Choice::Op).collect(),
-        WheelKind::Actions => Action::ALL.iter().copied().map(Choice::Action).collect(),
+        WheelKind::Convert => (ops(lime_core::ops(lime_core::Wheel::Convert, files)), vec![]),
+        WheelKind::Tools => {
+            // Zip and Compress share one button: dropping zips, resting on it opens the ring with
+            // the file's own Compress and every archive format.
+            let mut tools = lime_core::ops(lime_core::Wheel::Tools, files);
+            let mut ring: Vec<lime_core::Op> = tools.iter().position(|o| o.id == "compress").map(|i| tools.remove(i)).into_iter().collect();
+            for o in ring.iter_mut().chain(&mut tools) {
+                o.label = match o.id.as_str() {
+                    "zip" => "Compress",
+                    "compress" => "Shrink",
+                    _ => continue,
+                }
+                .into();
+            }
+            ring.extend(lime_core::compress_ops());
+            (ops(tools), ops(ring))
+        }
+        WheelKind::Actions => (Action::ALL.iter().copied().map(Choice::Action).collect(), vec![]),
     }
 }
 
@@ -535,7 +635,7 @@ pub fn shown() -> Option<WheelKind> {
 /// Opens the wheel centred on `at`. With `keyboard` it takes key focus and remembers `files`,
 /// since there is no drag pasteboard to read them from.
 pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoint, keyboard: bool) {
-    let choices = choices(kind, files);
+    let (choices, ring_choices) = choices(kind, files);
     WHEEL.with_borrow_mut(|w| {
         let (panel, view, glass) = w.get_or_insert_with(|| {
             let panel: Retained<WheelPanel> = unsafe {
@@ -576,16 +676,14 @@ pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoi
         });
         // Keep the wheel where it first appeared when switching kinds mid-drag; grow it in when it is new.
         let fresh = !panel.isVisible() || view.ivars().borrow().busy.is_some();
-        if fresh {
-            panel.setFrameOrigin(NSPoint::new(at.x - SIZE / 2.0, at.y - SIZE / 2.0));
-        }
+        resize(panel, view, if fresh { at } else { centre_of(panel) }, SIZE);
         let (opened, scale) = if fresh { (Some(Instant::now()), 0.0) } else { (view.ivars().borrow().opened, view.ivars().borrow().scale) };
         // The view paints a solid disc over the glass that fades out as glassiness rises.
         let g = glass.as_ref().map(|_| crate::settings::glassiness());
         let hovered = if keyboard && !choices.is_empty() { Some(0) } else { None };
         let files = keyboard.then(|| files.to_vec());
-        *view.ivars().borrow_mut() = WheelData { kind: Some(kind), choices, hovered, glass: g, files, opened, scale, busy: None };
-        place(panel, glass.as_deref(), scale);
+        *view.ivars().borrow_mut() = WheelData { kind: Some(kind), choices, hovered, glass: g, files, opened, scale, ring_choices, ..Default::default() };
+        place(panel, glass.as_deref(), scale, DISC * scale);
         view.setNeedsDisplay(true);
         view.displayIfNeeded();
         panel.invalidateShadow(); // the shadow follows the drawn circle, not the square panel
@@ -599,13 +697,53 @@ pub fn show(mtm: MainThreadMarker, kind: WheelKind, files: &[PathBuf], at: NSPoi
     crate::animate();
 }
 
-/// Sizes the glass disc and fades the panel for grow-in step `scale` (0..1).
-fn place(panel: &NSPanel, glass: Option<&NSGlassEffectView>, scale: f64) {
+/// Fades the panel for grow-in step `scale` (0..1) and sizes the glass disc to radius `r`.
+fn place(panel: &NSPanel, glass: Option<&NSGlassEffectView>, scale: f64, r: f64) {
     panel.setAlphaValue(scale);
     if let Some(glass) = glass {
-        let r = DISC * scale;
-        glass.setFrame(NSRect::new(NSPoint::new(SIZE / 2.0 - r, SIZE / 2.0 - r), NSSize::new(r * 2.0, r * 2.0)));
+        let c = panel.frame().size.width / 2.0;
+        glass.setFrame(NSRect::new(NSPoint::new(c - r, c - r), NSSize::new(r * 2.0, r * 2.0)));
         glass.setCornerRadius(r);
+    } else {
+        panel.invalidateShadow(); // follows the growing ring
+    }
+}
+
+fn centre_of(panel: &NSPanel) -> NSPoint {
+    let f = panel.frame();
+    NSPoint::new(f.origin.x + f.size.width / 2.0, f.origin.y + f.size.height / 2.0)
+}
+
+/// Makes the panel and the wheel view a `size` square around `centre` (screen coordinates).
+fn resize(panel: &NSPanel, view: &WheelView, centre: NSPoint, size: f64) {
+    panel.setFrame_display(NSRect::new(NSPoint::new(centre.x - size / 2.0, centre.y - size / 2.0), NSSize::new(size, size)), false);
+    view.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(size, size)));
+}
+
+/// Opens the compress ring once the pointer has rested on Compress for `OPEN_HOLD`, and closes it once the
+/// pointer has been away from it for `CLOSE_HOLD`, so crossing the wheel on the way to the other side keeps it.
+pub fn tick() {
+    let changed = WHEEL.with_borrow(|w| {
+        let Some((panel, view, glass)) = w else { return false };
+        let due = view.ivars().borrow().ring_due(Instant::now());
+        let Some(open) = due.filter(|_| panel.isVisible()) else { return false };
+        {
+            let mut d = view.ivars().borrow_mut();
+            d.ring = if open { d.ring_choices.clone() } else { vec![] };
+            d.ring_opened = open.then(Instant::now);
+            d.ring_scale = 0.0;
+            (d.on_zip, d.away) = (None, None);
+            if d.hovered.is_some_and(|i| i >= d.choices.len()) {
+                d.hovered = None;
+            }
+        }
+        resize(panel, view, centre_of(panel), if open { RING_SIZE } else { SIZE });
+        place(panel, glass.as_deref(), 1.0, view.ivars().borrow().radius());
+        view.setNeedsDisplay(true);
+        true
+    });
+    if changed {
+        crate::animate();
     }
 }
 
@@ -644,10 +782,12 @@ pub fn animate() -> bool {
         if !panel.isVisible() {
             return false;
         }
-        let (scale, opening, busy, close) = {
+        let (scale, radius, opening, busy, close) = {
             let mut d = view.ivars().borrow_mut();
-            let t = d.opened.map_or(1.0, |o| (o.elapsed().as_secs_f64() / OPEN_SECS).min(1.0));
+            let grown = |since: Option<Instant>| since.map_or(1.0, |o| (o.elapsed().as_secs_f64() / OPEN_SECS).min(1.0));
+            let (t, rt) = (grown(d.opened), grown(d.ring_opened));
             d.scale = 1.0 - (1.0 - t).powi(3); // ease out
+            d.ring_scale = 1.0 - (1.0 - rt).powi(3);
             let close = d.busy.as_mut().is_some_and(|b| {
                 b.shown += (b.target - b.shown) * 0.25;
                 if b.target - b.shown < 0.003 {
@@ -658,9 +798,9 @@ pub fn animate() -> bool {
             if close {
                 d.busy = None;
             }
-            (d.scale, t < 1.0, d.busy.is_some(), close)
+            (d.scale, d.radius(), t < 1.0 || rt < 1.0, d.busy.is_some(), close)
         };
-        place(panel, glass.as_deref(), scale);
+        place(panel, glass.as_deref(), scale, radius);
         view.setNeedsDisplay(true);
         if close {
             panel.orderOut(None);
@@ -691,13 +831,39 @@ mod tests {
     fn segments_clockwise_from_top() {
         let c = SIZE / 2.0;
         let r = (INNER + OUTER) / 2.0;
-        assert_eq!(segment_at(NSPoint::new(c, c + r), 4), Some(0)); // top
-        assert_eq!(segment_at(NSPoint::new(c + r, c - 1.0), 4), Some(1)); // right, just below horizontal
-        assert_eq!(segment_at(NSPoint::new(c - 1.0, c - r), 4), Some(2)); // bottom
-        assert_eq!(segment_at(NSPoint::new(c - r, c + 1.0), 4), Some(3)); // left, just above horizontal
-        assert_eq!(segment_at(NSPoint::new(c, c), 4), None); // centre cancels
-        assert_eq!(segment_at(NSPoint::new(c + r, c), 0), None);
-        assert_eq!(segment_at(NSPoint::new(c + DISC + 1.0, c), 4), None); // just outside the disc
+        let at = |p: NSPoint, n| segment_at(p, NSPoint::new(c, c), INNER, DISC, n);
+        assert_eq!(at(NSPoint::new(c, c + r), 4), Some(0)); // top
+        assert_eq!(at(NSPoint::new(c + r, c - 1.0), 4), Some(1)); // right, just below horizontal
+        assert_eq!(at(NSPoint::new(c - 1.0, c - r), 4), Some(2)); // bottom
+        assert_eq!(at(NSPoint::new(c - r, c + 1.0), 4), Some(3)); // left, just above horizontal
+        assert_eq!(at(NSPoint::new(c, c), 4), None); // centre cancels
+        assert_eq!(at(NSPoint::new(c + r, c), 0), None);
+        assert_eq!(at(NSPoint::new(c + DISC + 1.0, c), 4), None); // just outside the disc
+    }
+
+    #[test]
+    fn ring_opens_after_resting_on_zip_and_survives_crossing() {
+        let zip = Choice::Op(lime_core::Op { id: "zip".into(), label: "Compress".into(), param: None });
+        let other = Choice::Op(lime_core::Op { id: "trim".into(), label: "Trim".into(), param: None });
+        let mut d = WheelData { choices: vec![other.clone(), zip], ring_choices: vec![other.clone(); 4], ..Default::default() };
+        let t0 = Instant::now();
+        let at = |s: f64| t0 + Duration::from_secs_f64(s);
+        d.hold(Some(1), at(0.0));
+        assert_eq!(d.ring_due(at(0.4)), None);
+        d.hold(Some(0), at(0.4)); // left early: the hold restarts
+        d.hold(Some(1), at(1.0));
+        assert_eq!(d.ring_due(at(1.4)), None);
+        assert_eq!(d.ring_due(at(1.5)), Some(true));
+        d.ring = d.ring_choices.clone();
+        (d.on_zip, d.away) = (None, None);
+        d.hold(Some(3), at(2.0)); // on the ring
+        d.hold(Some(0), at(2.0)); // crossing the middle
+        d.hold(None, at(2.5));
+        d.hold(Some(4), at(3.0)); // back on the ring in time
+        assert_eq!(d.ring_due(at(9.0)), None);
+        d.hold(None, at(9.0));
+        assert_eq!(d.ring_due(at(10.4)), None);
+        assert_eq!(d.ring_due(at(10.5)), Some(false));
     }
 
     #[test]

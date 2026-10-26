@@ -4,7 +4,7 @@
 use objc2::rc::Retained;
 use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSBackingStoreType, NSColor, NSFloatingWindowLevel, NSPanel, NSScreen, NSTextField,
+    NSAlert, NSAlertFirstButtonReturn, NSApplication, NSBackingStoreType, NSColor, NSFloatingWindowLevel, NSPanel, NSScreen, NSSecureTextField, NSTextField,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
 use objc2_foundation::{ns_string, NSPoint, NSRect, NSSize, NSString};
@@ -69,7 +69,8 @@ fn ask(mtm: MainThreadMarker, op: &lime_core::Op, param: &lime_core::Param) -> O
     alert.setInformativeText(&NSString::from_str(param.prompt));
     alert.addButtonWithTitle(ns_string!("Run"));
     alert.addButtonWithTitle(ns_string!("Cancel"));
-    let field = NSTextField::textFieldWithString(&NSString::from_str(param.default), mtm);
+    let field = if param.secret { Retained::into_super(NSSecureTextField::new(mtm)) } else { NSTextField::new(mtm) };
+    field.setStringValue(&NSString::from_str(param.default));
     field.setFrame(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(240.0, 24.0)));
     alert.setAccessoryView(Some(&field));
     alert.window().setInitialFirstResponder(Some(&field));
@@ -89,9 +90,9 @@ pub fn start(mtm: MainThreadMarker, op: lime_core::Op, files: Vec<PathBuf>) -> O
     if files.is_empty() {
         return None;
     }
-    let arg = match &op.param {
-        Some(p) => Some(ask(mtm, &op, p)?),
-        None => None,
+    let (arg, secret) = match &op.param {
+        Some(p) => (Some(ask(mtm, &op, p)?), p.secret),
+        None => (None, false),
     };
     let index = {
         let mut jobs = JOBS.lock().unwrap();
@@ -107,8 +108,10 @@ pub fn start(mtm: MainThreadMarker, op: lime_core::Op, files: Vec<PathBuf>) -> O
     std::thread::spawn(move || {
         let mut cmd = Command::new(cli());
         cmd.arg("run").arg(&op.id);
-        if let Some(a) = &arg {
-            cmd.args(["--arg", a]);
+        match &arg {
+            Some(a) if secret => drop(cmd.env("LIME_ARG", a)),
+            Some(a) => drop(cmd.args(["--arg", a])),
+            None => {}
         }
         cmd.args(&files).env("LIME_PROGRESS", "1").stdout(Stdio::piped()).stderr(Stdio::piped());
         let status = match run(&mut cmd, index) {

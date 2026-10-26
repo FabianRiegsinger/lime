@@ -131,6 +131,7 @@ fn tick(mtm: MainThreadMarker) {
     }
     jobs::refresh(mtm);
     keyboard::tick(mtm);
+    wheel::tick();
 
     let mouse_down = NSEvent::pressedMouseButtons() & 1 != 0;
     let count = NSPasteboard::pasteboardWithName(unsafe { NSPasteboardNameDrag }).changeCount();

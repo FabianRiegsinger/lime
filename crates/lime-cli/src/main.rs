@@ -6,7 +6,8 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage:
   lime ops convert|tools FILE...        list operations for FILEs (id<TAB>label<TAB>prompt<TAB>default)
-  lime run OP [--arg VALUE] FILE...     run OP (e.g. to:webp, compress) and print created paths";
+  lime run OP [--arg VALUE] FILE...     run OP (e.g. to:webp, compress) and print created paths;
+                                        VALUE may also come from $LIME_ARG";
 
 fn main() {
     if let Err(e) = real_main() {
@@ -40,7 +41,8 @@ fn real_main() -> Result<()> {
                     Some(v)
                 }
                 Some(_) => bail!("--arg needs a value"),
-                None => None,
+                // The app sends passwords this way, out of the process list.
+                None => std::env::var("LIME_ARG").ok(),
             };
             let files: Vec<PathBuf> = rest.into_iter().map(PathBuf::from).collect();
             for p in lime_core::run(&op, &files, arg.as_deref())? {
